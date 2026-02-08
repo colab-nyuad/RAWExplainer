@@ -1,0 +1,52 @@
+output_dir: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/experiments/
+checkpoint: /scratch/sl9030/gml/versions/Graph-Transformer/NBFNet-PyG/experiments/NBFNet/NELL995/2025-09-11-11-08-02/model_epoch_20.pth
+
+dataset:
+  class: NELL995
+  root: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+
+wandb:
+  use: false
+  entity: "team_ryoji"
+  project: SampleX-NELL995
+  name: NBFNet-NELL-0b-test
+
+model:
+  class: NBFNet
+  input_dim: 32
+  hidden_dims: [32, 32, 32, 32, 32, 32]
+  message_func: distmult
+  aggregate_func: pna
+  short_cut: yes
+  layer_norm: yes
+  dependent: no
+  distance_dropout: no
+  randomized_edge_drop: 0.0
+  use_pyg_propagation: yes
+
+task:
+  num_negative: 32
+  strict_negative: yes
+  adversarial_temperature: 1
+  metric: [mr, mrr, hits@1, hits@3, hits@10]
+
+optimizer:
+  class: Adam
+  lr: 5.0e-3
+
+eval:
+  randomized_edge_drop: [0]
+  eval_on_edge_drop: no
+  eval_on_distance_drop: no
+  remove_ground_truth: no
+  keep_ground_truth: no
+  eval_on_train: no
+  save_topk: -1
+
+train:
+  gpus: {{ gpus }}
+  batch_size: 16
+  num_epoch: 0
+  log_interval: 100
+  train_on_expl: no
+  fine_tune_on_val: no

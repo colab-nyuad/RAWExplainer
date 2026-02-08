@@ -1,0 +1,53 @@
+#!/bin/bash
+#SBATCH --job-name=RAWExplainer-NELL-RW-HPO-Diff-K-TrainSamples
+#SBATCH -q bosco
+#SBATCH --nodes=1
+#SBATCH -p nvidia
+#SBATCH --gres=gpu:a100:2
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=280GB
+#SBATCH --time=95:59:59
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=slamichhane@nyu.edu
+#SBATCH --output=./job_outputs/2026-01-12/hypersearch_%x_%j.log
+#SBATCH --error=./job_outputs/2026-01-12/hypersearch_%x_%j.log
+
+#activate any environments if required
+source /share/apps/NYUAD5/miniconda/3-4.11.0/bin/activate
+conda activate Ultra
+
+# Set CUDA memory management settings to reduce fragmentation
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+
+code_dir=/scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG
+HYP_SCRIPT=script_hypersearch/hypersearch_rawexplainer_nell_rw_diff_1.py
+OPTIM_SCRIPT=script/global_explanation_optim_diff_nell_k_1.py
+CONFIG=config/new_explain/nell995-rawexplainer-rw-diff-k-1.yaml
+TRAIN_CONFIG=config/new_nbfnet/nell995-finetune-samyam.yaml
+port=$(python script/find_free_port.py)
+
+echo "Starting hyperparameter search at $(date)"
+echo "Running 51 hyperparameter combinations (0-50)"
+
+for i in {0..50}
+do
+    echo "=========================================="
+    echo "Running hyperparameter combination $i/50 at $(date)"
+    echo "=========================================="
+    
+    python $HYP_SCRIPT -c "$CONFIG" --hyper_run_id="$i" --gpus [0,1] --use_wandb yes
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Hyperparameter generation failed for run $i"
+        continue
+    fi
+    
+    python -m torch.distributed.launch --nproc_per_node=2 --master_port="$port" $OPTIM_SCRIPT -c "$CONFIG" --gpus [0,1] --use_wandb yes --hyper_search --train_config "$TRAIN_CONFIG"
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Training failed for run $i"
+    else
+        echo "Successfully completed run $i at $(date)"
+    fi
+done
+
+echo "Hyperparameter search completed at $(date)"
+

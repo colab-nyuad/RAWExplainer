@@ -1,0 +1,37 @@
+# PyCharm
+/.idea
+
+# VS Code
+/.vscode/settings.json
+
+# Sphinx
+/doc/build
+
+# Python
+__pycache__
+*.pyc
+
+# macOS
+.DS_Store
+
+# Experiment logs
+experiments/
+topk/
+explanation/
+RWExplainer/
+PaGELink/
+RandomWalk/
+GNNExplainer/
+RelPGExplainer/
+RWDropout/
+PGExplainer/
+Hetero/
+
+hyperparam_cfg_*.pt
+hyperparam_debug_*.txt
+hyperparams/**/*.csv
+
+*.log
+docs/
+plots/output
+plots/

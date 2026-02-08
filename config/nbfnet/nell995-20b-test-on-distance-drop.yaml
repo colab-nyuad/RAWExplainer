@@ -1,0 +1,58 @@
+# Config for testing 20b model (trained with random edge dropping) on distance-based dropping
+output_dir: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/experiments/
+checkpoint: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/experiments/NBFNet/NELL995/2025-09-18-14-44-29-phi-eval/model_epoch_14.pth
+
+dataset:
+  class: NELL995
+  root: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+
+wandb:
+  use: {{ use_wandb }}
+  entity: "team_ryoji"
+  project: SampleX-NELL995
+  name: NBFNet-20b-TestOnDistance-HPO-0001lr-64neg-FalseStrictNeg
+
+model:
+  class: NBFNet
+  input_dim: 32
+  hidden_dims: [32, 32, 32, 32, 32, 32]
+  message_func: distmult
+  aggregate_func: pna
+  short_cut: yes
+  layer_norm: yes
+  dependent: no
+  # Model was trained with random edge dropout, but for distance evaluation we need different settings
+  distance_dropout: no              # Will be overridden to 'yes' by test_distance function
+  max_dropout_distance: 10          # Max distance for distance-based evaluation 
+  max_edge_drop_prob: 0.10          # Max probability to drop edge at each distance
+  randomized_edge_drop: 0            # Set to 0 for distance evaluation (test_distance sets this to 0 anyway)
+  use_pyg_propagation: yes
+
+task:
+  num_negative: 64
+  strict_negative: no
+  adversarial_temperature: 1
+  metric: [mr, mrr, hits@1, hits@3, hits@10]
+
+optimizer:
+  class: Adam
+  lr: 0.001
+
+eval:
+  randomized_edge_drop: [0, 0.1, 0.2, 0.3, 0.4, 0.5]
+  eval_on_edge_drop: no                                 # Don't test on random edge drop
+  eval_distance: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]        # Test on distance 1 to 10
+  eval_on_distance_drop: yes                            # Enable distance-based testing
+  remove_ground_truth: no
+  keep_ground_truth: no
+  eval_on_train: no
+  save_topk: -1
+
+train:
+  gpus: {{ gpus }}
+  batch_size: 16
+  num_epoch: 0                      # Set to 0 since we're only evaluating
+  step: 1
+  log_interval: 100
+  train_on_expl: no
+  fine_tune_on_val: no
