@@ -1,4 +1,4 @@
-output_dir: /scratch/id/RAWExplainer/experiments/
+output_dir: /scratch/id/RAWExplainer/retrain_dir/
 
 dataset:
   class: NELL995
