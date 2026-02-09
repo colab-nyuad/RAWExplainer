@@ -1,5 +1,4 @@
 # RAWExplainer
-# RAWExplainer
 This repository contains the source code, datasets and configuration files for RAW-Explainer (Random Walk Explainer)
 
 ## Overview
