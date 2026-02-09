@@ -37,110 +37,98 @@ def train_explainer(split_data, batch, mode, model):
     """
     # set the model to training mode
     model.set_train()
-    # get the topk predicted tails and the node and rel embeddings
-    topk_tails, _, _ = explainer_util.full_graph_prediction(
-        split_data, batch, mode, model
-    )
-    # create the central nodes (head & topk tails) for making the ego network
-    heads = torch.where(mode, batch[:, 0], batch[:, 1])
-    central_nodes = torch.cat((heads.unsqueeze(1), topk_tails), dim=-1)
-    # prepare the triples for prediction, NBFNet will predict the score for the top tails
-    pos_h_index, pos_t_index, pos_r_index = batch.t()
-    h_index = pos_h_index.unsqueeze(-1).repeat(1, model.topk_tails)
-    t_index = pos_t_index.unsqueeze(-1).repeat(1, model.topk_tails)
-    r_index = pos_r_index.unsqueeze(-1).repeat(1, model.topk_tails)
-    h_index = torch.where(
-        mode.unsqueeze(1).repeat(1, model.topk_tails), h_index, topk_tails
-    )
-    t_index = torch.where(
-        mode.unsqueeze(1).repeat(1, model.topk_tails), topk_tails, t_index
-    )
-    batch = torch.stack([h_index, t_index, r_index], dim=-1)
-    # convert the batch to tail prediction
-    batch = tasks.conversion_to_tail_prediction(
-        batch, model.pred_model.num_relation, mode
-    )
+    
+    # Check if this is a model-agnostic explainer
+    use_ground_truth_only = getattr(model, 'use_ground_truth_only', False)
+    use_head_only = getattr(model, 'use_head_only', False)
+    
+    if use_head_only:
+        # Head-only mode: use ONLY head as central node (no GT bias)
+        # No NBFNet prediction needed!
+        heads = torch.where(mode, batch[:, 0], batch[:, 1])
+        central_nodes = heads.unsqueeze(-1)  # (batch_size, 1) - only head
+        
+        # Create batch for the single ground truth query
+        batch = batch.unsqueeze(1)  # (batch_size, 1, 3)
+        batch = tasks.conversion_to_tail_prediction(
+            batch, model.pred_model.num_relation, mode
+        )
+        
+        node_embeds, R_embeds = None, None
+    elif use_ground_truth_only:
+        # Model-agnostic path: use only (head, ground_truth_tail) as central nodes
+        # No NBFNet prediction needed!
+        heads = torch.where(mode, batch[:, 0], batch[:, 1])
+        tails = torch.where(mode, batch[:, 1], batch[:, 0])  # ground truth tail
+        central_nodes = torch.stack([heads, tails], dim=-1)  # (batch_size, 2)
+        
+        # Create batch for the single ground truth query
+        batch = batch.unsqueeze(1)  # (batch_size, 1, 3)
+        batch = tasks.conversion_to_tail_prediction(
+            batch, model.pred_model.num_relation, mode
+        )
+        
+        node_embeds, R_embeds = None, None
+    else:
+        # Standard path: use NBFNet predictions as central nodes
+        # get the topk predicted tails and the node and rel embeddings
+        topk_tails, node_embeds, R_embeds = explainer_util.full_graph_prediction(
+            split_data, batch, mode, model
+        )
+        # create the central nodes (head & topk tails) for making the ego network
+        heads = torch.where(mode, batch[:, 0], batch[:, 1])
+        central_nodes = torch.cat((heads.unsqueeze(1), topk_tails), dim=-1)
+        # prepare the triples for prediction, NBFNet will predict the score for the top tails
+        pos_h_index, pos_t_index, pos_r_index = batch.t()
+        h_index = pos_h_index.unsqueeze(-1).repeat(1, model.topk_tails)
+        t_index = pos_t_index.unsqueeze(-1).repeat(1, model.topk_tails)
+        r_index = pos_r_index.unsqueeze(-1).repeat(1, model.topk_tails)
+        h_index = torch.where(
+            mode.unsqueeze(1).repeat(1, model.topk_tails), h_index, topk_tails
+        )
+        t_index = torch.where(
+            mode.unsqueeze(1).repeat(1, model.topk_tails), topk_tails, t_index
+        )
+        batch = torch.stack([h_index, t_index, r_index], dim=-1)
+        # convert the batch to tail prediction
+        batch = tasks.conversion_to_tail_prediction(
+            batch, model.pred_model.num_relation, mode
+        )
 
     if model.ego_network:  # explain from the ego network around the head and tail
         # prepare the ego data based on the central nodes
         data = data_util.prepare_ego_data(split_data, central_nodes, model.hops)
         # relabel the batch and also get the mask indicating the tails that are inside the ego network
         batch, valid_tails = data_util.relabel_batch(data, batch)
-        heads = batch[:, 0, 0]
-        tails = batch[:, :, 1]
-        assert torch.equal(
-            data.central_node_index, torch.cat((heads.unsqueeze(1), tails), dim=-1)
-        ) and torch.all(valid_tails)
+        if not use_ground_truth_only:
+            heads = batch[:, 0, 0]
+            tails = batch[:, :, 1]
+            assert torch.equal(
+                data.central_node_index, torch.cat((heads.unsqueeze(1), tails), dim=-1)
+            ) and torch.all(valid_tails)
         # create batched_edge_index and edge_filter based on the masked data
         data = data_util.create_batched_data(data)
+        if model.__class__.__name__ == "PowerLink":
+            node_embeds = data_util.create_s_node_embeds(data, node_embeds)
     else:
         data = data_util.prepare_full_data(split_data, len(batch), central_nodes)
         data = data_util.create_batched_data(data)  # create the batched data
 
     # do masking
     data = model.pred_model.masking(data, batch)
-    model.train_mask(data, batch)
-
-
-@torch.no_grad()
-def test_prediction(
-    cfg, test_data, triples, mode, model, batch, eval_mask_type=None, ratio=None
-):
-    """
-    Get the prediction of NBFNet given the Explanatory subgraph. Assumes the explainer is already trained.
-    Args:
-        cfg: the config
-        test_data: the full test data
-        triples: the positive triples
-        mode: the mode of evaluation
-        model: the explainer model
-        batch: the batch of triples to evaluate
-        eval_mask_type: the evaluation mask type
-        ratio: the budget for the evaluation mask type
-    Returns:
-        pred: the prediction for each triple
-        node_mask: the mask of which node was included in the explanatory subgraph
-        edge_mask: the mask of which edge was included in the explanatory subgraph
-        num_edges: the number of edges in the explanatory subgraph
-        num_nodes: the number of nodes in the explanatory subgraph
-    """
-    model.eval()
-    if eval_mask_type is not None:
-        setattr(model, eval_mask_type, ratio)
-    # get the topk predicted tails and the node and rel embeddings
-    topk_tails, _, _ = explainer_util.full_graph_prediction(
-        test_data, triples, mode, model
-    )
-    heads = torch.where(mode, triples[:, 0], triples[:, 1])
-    central_nodes = torch.cat((heads.unsqueeze(1), topk_tails), dim=-1)
-    batch = tasks.conversion_to_tail_prediction(
-        batch, model.eval_model.num_relation, mode
-    )
-
-    if model.ego_network:
-        # prepare the ego data based on the central nodes
-        data = data_util.prepare_ego_data(test_data, central_nodes, model.hops)
-        batch = data_util.check_if_tail_in_network(data, batch)
-        batch, valid_tails = data_util.relabel_batch(data, batch)
-        # create batched_edge_index and edge_filter based on the masked data
-        data = data_util.create_batched_data(data)
+    if model.__class__.__name__ == "PowerLink":
+        model.train_mask(data, batch, node_embeds, R_embeds)
     else:
-        data = data_util.prepare_full_data(test_data, len(batch), central_nodes)
-        data = data_util.create_batched_data(data)  # create the batched data
+        model.train_mask(data, batch)
 
-    # do masking
-    data = model.eval_model.masking(data, batch)
-    pred, node_mask, edge_mask, num_edges, num_nodes = model.evaluate_mask(data, batch)
-
-    if model.ego_network:
-        # for the predictions outside the ego network, it will get a score of -inf
-        pred[~valid_tails] = float("-inf")
-        # pred[~node_mask] = float('-inf') # for the predictions outside the explanatory subgraph, it will get a score of -inf
-    return pred, node_mask, edge_mask, num_edges, num_nodes
+    return data
 
 
 def set_budget(cfg, model, eval_mask_type, ratios):
-    if eval_mask_type is not None and cfg.explainer["class"] == "PaGELink":
+    if eval_mask_type is not None and cfg.explainer["class"] in [
+        "PaGELink",
+        "PowerLink",
+    ]:
         # for PaGE-Link the process will retrieve paths walks after training
         # it will get the paths until it can satisfy the max quota or the time limit.
         setattr(model, eval_mask_type, max(ratios))
@@ -150,7 +138,21 @@ def reset_explainer(cfg, model):
     # resets the explainer for each instance
     if cfg.explainer["class"] == "RandomWalk":
         model.reset_node_dist()
-        # setattr(model, "node_dist", None)
+    elif cfg.explainer["class"] == "EgoNet":
+        model.reset_edge_scores()
+    elif cfg.explainer["class"] == "BFSDistance":
+        model.reset_edge_distances()
+    elif cfg.explainer["class"] == "BFSNode":
+        model.reset_node_dist()
+
+
+def partition_triplets(cfg, triplets):
+    # partition the triplets so that the explanation can be obtained in a distributed manner.
+    # only useful for PaGELink since it cannot achieve efficient DDP.
+    if hasattr(cfg, "num_partitions"):
+        partitions = triplets.chunk(cfg.num_partitions)
+        triplets = partitions[cfg.partition_id]
+    return triplets
 
 
 def explain(
@@ -160,6 +162,7 @@ def explain(
     logger,
     device,
     filtered_data=None,
+    test_topk=None,
     working_dir=None,
     split="test",
     run=None,
@@ -192,15 +195,19 @@ def explain(
     triplets = torch.cat(
         [split_data.target_edge_index, split_data.target_edge_type.unsqueeze(0)]
     ).t()
-    # triplets = triplets[:32]
+    # triplets = triplets[:64]
+    # * Partition the data if necessary *
+    triplets = partition_triplets(cfg, triplets)
+
     sampler = torch_data.DistributedSampler(triplets, world_size, rank)
     loader = torch_data.DataLoader(triplets, cfg.train.batch_size, sampler=sampler)
 
     # * Logging Setup *
     stats = explainer_util.logging_setup(cfg)
     if "save_explanation" in cfg and cfg.save_explanation:
+        # we only test this for hard edge mask with budget so that we can pad it to the max edges.
+        assert eval_mask_type == "hard_edge_mask_top_k"
         save_explanation = True
-        assert world_size == 1
     else:
         save_explanation = False
         explanations = None
@@ -209,9 +216,41 @@ def explain(
     is_synthetic = cfg.dataset["class"] in ["synthetic", "aug_citation"]
     if rank == 0:
         pbar = tqdm(total=len(loader))
+    if (split == "train" and hasattr(cfg, "train_walltime")) or (
+        split == "valid" and hasattr(cfg, "valid_walltime")
+    ):
+        walltime_seconds = (getattr(cfg, f"{split}_walltime") * 3600) / world_size
+        if hasattr(cfg, "num_partitions"):
+            walltime_seconds = walltime_seconds / cfg.num_partitions
+    else:
+        walltime_seconds = float("inf")
+    start_time = time.time()
+    processed_count = 1
+    save_count = 0
 
     # * Explain each instance *
     for batch in loader:
+        elapsed_time = time.time() - start_time
+        if elapsed_time >= walltime_seconds:
+            if rank == 0:
+                logger.warning(f"Walltime reached.")
+            explainer_util.periodic_saving(
+                cfg,
+                ratios,
+                stats,
+                save_explanation,
+                rank,
+                world_size,
+                device,
+                working_dir,
+                save_count,
+            )
+            save_count += 1
+            # reset the stats dictionary
+            stats = explainer_util.logging_setup(cfg)
+            util.synchronize()
+            break
+
         # * Triple & Filtering Setup*
         batch_size = len(batch)
         t_batch, h_batch = tasks.all_negative(split_data, batch)
@@ -226,21 +265,32 @@ def explain(
         reset_explainer(cfg, model)  # reset the explainer for new instance
         set_budget(cfg, model, eval_mask_type, ratios)
         # train the explainer for these specific subgraphs & predictions
-        train_explainer(split_data, batch, mode, model)
+        data = train_explainer(split_data, batch, mode, model)
+        # retain the original batch in case it's relabeld in the ego network process.
+        query_batch = t_batch.clone()
+        data, t_batch, _, _, valid_tails = explainer_util.test_preparation(
+            cfg,
+            split_data,
+            triples=batch,
+            mode=mode,
+            model=model,
+            batch=t_batch,
+            test_topk=test_topk,
+            data=data,
+        )
 
         for eval_type in cfg.explainer_eval.eval_type:
             with explainer_util.ExplainerEval(model, eval_type):
                 for r in ratios:
                     t_pred, t_node_mask, t_edge_mask, t_num_edges, t_num_nodes = (
-                        test_prediction(
+                        explainer_util.test_prediction(
                             cfg,
-                            split_data,
-                            triples=batch,
-                            mode=mode,
-                            model=model,
+                            data,
+                            model,
                             batch=t_batch,
                             eval_mask_type=eval_mask_type,
                             ratio=r,
+                            valid_tails=valid_tails,
                         )
                     )
                     ranking = tasks.compute_ranking(t_pred, pos_t_index, t_mask)
@@ -258,7 +308,9 @@ def explain(
                     stats[eval_type]["modes"][r].append(torch.ones(ranking.shape))
                     if save_explanation:
                         stats[eval_type]["explanations"][r].append(
-                            t_edge_mask.to("cpu")
+                            explainer_util.get_expl_edge_indices(
+                                query_batch, t_edge_mask, max_edges=r
+                            )
                         )
 
         if is_synthetic:
@@ -271,20 +323,36 @@ def explain(
         reset_explainer(cfg, model)  # reset the explainer for new instance
         set_budget(cfg, model, eval_mask_type, ratios)
         # train the explainer for these specific subgraphs & predictions
-        train_explainer(split_data, batch, mode, model)
+        data = train_explainer(split_data, batch, mode, model)
+        # retain the original batch in case it's relabeld in the ego network process.
+        query_batch = h_batch.clone()
+        query_batch = tasks.conversion_to_tail_prediction(
+            query_batch, model.eval_model.num_relation, mode
+        )
+
+        data, h_batch, _, _, valid_tails = explainer_util.test_preparation(
+            cfg,
+            split_data,
+            triples=batch,
+            mode=mode,
+            model=model,
+            batch=h_batch,
+            test_topk=test_topk,
+            data=data,
+        )
+
         for eval_type in cfg.explainer_eval.eval_type:
             with explainer_util.ExplainerEval(model, eval_type):
                 for r in ratios:
                     h_pred, h_node_mask, h_edge_mask, h_num_edges, h_num_nodes = (
-                        test_prediction(
+                        explainer_util.test_prediction(
                             cfg,
-                            split_data,
-                            triples=batch,
-                            mode=mode,
-                            model=model,
+                            data,
+                            model,
                             batch=h_batch,
-                            eval_mask_type=eval_mask_type,
+                            eval_mask_type=cfg.explainer_eval.eval_mask_type,
                             ratio=r,
+                            valid_tails=valid_tails,
                         )
                     )
                     ranking = tasks.compute_ranking(h_pred, pos_h_index, h_mask)
@@ -302,11 +370,31 @@ def explain(
                     stats[eval_type]["modes"][r].append(torch.zeros(ranking.shape))
                     if save_explanation:
                         stats[eval_type]["explanations"][r].append(
-                            h_edge_mask.to("cpu")
+                            explainer_util.get_expl_edge_indices(
+                                query_batch, h_edge_mask, max_edges=r
+                            )
                         )
+
+        if processed_count % (100 // world_size) == 0 or processed_count == len(loader):
+            explainer_util.periodic_saving(
+                cfg,
+                ratios,
+                stats,
+                save_explanation,
+                rank,
+                world_size,
+                device,
+                working_dir,
+                save_count,
+            )
+            save_count += 1
+            # reset the stats dictionary
+            stats = explainer_util.logging_setup(cfg)
+            util.synchronize()
 
         if rank == 0:
             pbar.update(1)
+        processed_count += 1
 
     if rank == 0:
         pbar.close()
@@ -318,46 +406,65 @@ def explain(
         mrr_stats[eval_type] = {}
         avg_score = defaultdict(list)
         for r in ratios:
+            # make sure that all the result has been written to disk already.
+            assert len(stats[eval_type]["rankings"][r]) == 0
             # * Aggr statistics across devices *
             if rank == 0:
                 logger.warning(separator)
-            statistics = {
-                "ranking": torch.cat(stats[eval_type]["rankings"][r]),
-                "inclusion": torch.cat(stats[eval_type]["inclusions"][r]),
-                "num_negative": torch.cat(stats[eval_type]["num_negatives"][r]),
-                "num_edges": torch.cat(stats[eval_type]["num_edges"][r]),
-                "num_nodes": torch.cat(stats[eval_type]["num_nodes"][r]),
-                "heads": torch.cat(stats[eval_type]["heads"][r]),
-                "tails": torch.cat(stats[eval_type]["tails"][r]),
-                "rels": torch.cat(stats[eval_type]["rels"][r]),
-                "modes": torch.cat(stats[eval_type]["modes"][r]),
-            }
-            if save_explanation:
-                explanations = torch.cat(stats[eval_type]["explanations"][r])
 
-            all_stats = explainer_util.combine_stats(
-                rank, world_size, device, statistics
-            )
-            # * Calculate Metric *
-            _, scores = explainer_util.calc_metric_and_save_result(
-                cfg,
-                rank,
-                eval_type,
-                eval_mask_type,
-                r,
-                all_stats,
-                split,
-                run,
-                epoch,
-                False,
-                working_dir,
-                save_explanation,
-                all_explanations=explanations,
-            )
-            for metric, score in scores.items():
-                avg_score[metric].append(score)
+                # load the results from disk and combine.
+                all_stats = defaultdict(list)
+                all_explanations = []
+                dir_path = os.path.join(working_dir, "saved_results")
+
+                for i in range(save_count):
+                    save_path = os.path.join(dir_path, f"result_{eval_type}_{r}_{i}.pt")
+                    result = torch.load(save_path)
+                    for key, var in result.items():
+                        all_stats[key].append(var)
+
+                    if save_explanation:
+                        save_path = os.path.join(
+                            dir_path, f"explanation_{eval_type}_{r}_{i}.pt"
+                        )
+                        explanation = torch.load(save_path)
+                        all_explanations.append(explanation)
+
+                for key, var in all_stats.items():
+                    all_stats[key] = torch.cat(var)
+
+                if save_explanation:
+                    all_explanations = torch.cat(all_explanations)
+                else:
+                    all_explanations = None
+                mrr = (1 / all_stats["ranking"].float()).mean()
+                # * Calculate Metric *
+                _, scores = explainer_util.calc_metric_and_save_result(
+                    cfg,
+                    rank,
+                    eval_type,
+                    eval_mask_type,
+                    r,
+                    all_stats,
+                    split,
+                    run,
+                    epoch,
+                    False,
+                    working_dir,
+                    save_explanation,
+                    all_explanations=all_explanations,
+                    final_evaluation=True,
+                )
+                for metric, score in scores.items():
+                    avg_score[metric].append(score)
+            else:
+                mrr = torch.tensor(0, device=device, dtype=torch.float32)
+
+            if world_size > 1:
+                # share the MRR result with other devices.
+                dist.all_reduce(mrr, op=dist.ReduceOp.SUM)
+
             # * Log MRR *
-            mrr = (1 / all_stats["ranking"].float()).mean()
             mrr_stats[eval_type][f"{cfg.explainer_eval.eval_mask_type}_{r}"] = mrr
 
         if rank == 0 and eval_mask_type is not None:
@@ -374,21 +481,31 @@ def explain(
     # * Dual Evaluation *
     if len(cfg.explainer_eval.eval_type) == 2 and rank == 0:
         char_stats = {}
+        fidelity_stats = {}
         logger.warning(separator)
-        # calculate the char score
+        # calculate the char score and fidelity+
         if "hard" in cfg.explainer_eval.eval_mask_type:
             factual_scores, counter_factual_scores = [], []
+            fidelity_plus_scores = []
             for ratio, factual_score in mrr_stats["factual_eval"].items():
                 counter_factual_score = mrr_stats["counter_factual_eval"][ratio]
                 factual_scores.append(factual_score.item())
                 counter_factual_scores.append(counter_factual_score.item())
+                
+                # Fidelity+ (MRR-based): measures rank degradation when explanation is removed
+                # Higher = better explanation (removing it hurts the prediction more)
+                fidelity_plus = factual_score - counter_factual_score
+                fidelity_plus_scores.append(fidelity_plus.item())
+                logger.warning(f"fidelity+_mrr_{ratio}: %g" % (fidelity_plus.item()))
+                fidelity_stats[f"{split}/fidelity+_mrr_{ratio}"] = fidelity_plus.item()
+                
                 char_score = 1 / (
                     (0.5 / factual_score) + 0.5 / (1 - counter_factual_score)
                 )
                 logger.warning(f"char_score_{ratio}: %g" % (char_score.item()))
                 char_stats[f"{split}/char_score_{ratio}"] = char_score.item()
 
-        # calculate the average characterization score
+        # calculate the average characterization score and average fidelity+
         avg_factual_score = sum(factual_scores) / len(factual_scores)
         avg_counter_factual_score = sum(counter_factual_scores) / len(
             counter_factual_scores
@@ -396,22 +513,30 @@ def explain(
         result = 1 / (0.5 / avg_factual_score + 0.5 / (1 - avg_counter_factual_score))
         char_stats[f"{split}/avg_char_score"] = result
         logger.warning("avg_char_score: %g" % (result))
+        
+        # Average Fidelity+ (MRR-based)
+        avg_fidelity_plus = sum(fidelity_plus_scores) / len(fidelity_plus_scores)
+        fidelity_stats[f"{split}/avg_fidelity+_mrr"] = avg_fidelity_plus
+        logger.warning("avg_fidelity+_mrr: %g" % (avg_fidelity_plus))
 
         # * Wandb Log *
         if cfg.wandb.use:
-            run.log(char_stats, step=epoch, commit=True)
+            all_stats = {**char_stats, **fidelity_stats}
+            run.log(all_stats, step=epoch, commit=True)
 
     return
 
 
 def run(cfg, args):
     # * Dir, Logger Setup *
+    dir = os.getcwd()
     working_dir = util.create_working_directory(cfg)
     torch.manual_seed(args.seed + util.get_rank())
     logger = util.get_root_logger()
     if util.get_rank() == 0:
         logger.warning("Random seed: %d" % args.seed)
         logger.warning("Config file: %s" % args.config)
+        logger.warning(f"Process ID: {os.getpid()}")
         logger.warning(pprint.pformat(cfg))
 
     # * Dataset Setup *
@@ -447,98 +572,74 @@ def run(cfg, args):
 
     # * Wandb Setup *
     rank = util.get_rank()
-    run = util.wandb_setup(cfg, rank)
+    wandb_run = util.wandb_setup(cfg, rank)
 
     # * Explanation *
-    if "hard" in cfg.explainer_eval.eval_mask_type:
-        ratios = getattr(cfg.explainer_eval, cfg.explainer_eval.eval_mask_type)
-        if rank == 0:
-            logger.warning(separator)
-            logger.warning(
-                f"Evaluate on valid with {cfg.explainer_eval.eval_mask_type}"
-            )
-        start_time = time.time()
-        explain(
-            cfg,
-            explainer,
-            valid_data,
-            logger,
-            device,
-            filtered_data=filtered_data,
-            working_dir=working_dir,
-            split="valid",
-            run=run,
-            epoch=0,
-            eval_mask_type=cfg.explainer_eval.eval_mask_type,
-            ratios=ratios,
-        )
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        if util.get_rank() == 0:
-            logger.warning(separator)
-            logger.warning(
-                f"Execution time for inference on valid: {elapsed_time:.1f} seconds"
-            )
+    if "evaluate_on_train" in cfg and cfg.evaluate_on_train:
+        splits = [[valid_data, "valid"], [train_data, "train"], [test_data, "test"]]
     else:
-        if rank == 0:
-            logger.warning(separator)
-            logger.warning("Evaluate on valid")
-        explain(
-            cfg,
-            explainer,
-            valid_data,
-            logger,
-            device,
-            filtered_data=filtered_data,
-            working_dir=working_dir,
-            split="valid",
-            run=run,
-            epoch=0,
-            ratios=[0],
-        )
+        splits = [[valid_data, "valid"], [test_data, "test"]]
 
-    if args.hyper_search:
-        return  # do not get test performance if doing hypersearch
-    # disable wandb
-    cfg.wandb.use = False
+    if hasattr(cfg, "evaluate_only_on_train") and cfg.evaluate_only_on_train:
+        splits = [[train_data, "train"]]
 
-    # * Test Set Explanation *
-    if "hard" in cfg.explainer_eval.eval_mask_type:
-        ratios = getattr(cfg.explainer_eval, cfg.explainer_eval.eval_mask_type)
-        if rank == 0:
-            logger.warning(separator)
-            logger.warning(f"Evaluate on test with {cfg.explainer_eval.eval_mask_type}")
-        explain(
-            cfg,
-            explainer,
-            test_data,
-            logger,
-            device,
-            filtered_data=filtered_data,
-            working_dir=working_dir,
-            split="test",
-            run=run,
-            epoch=0,
-            eval_mask_type=cfg.explainer_eval.eval_mask_type,
-            ratios=ratios,
-        )
-    else:
-        if rank == 0:
-            logger.warning(separator)
-            logger.warning("Evaluate on test")
-        explain(
-            cfg,
-            explainer,
-            test_data,
-            logger,
-            device,
-            filtered_data=filtered_data,
-            working_dir=working_dir,
-            split="test",
-            run=run,
-            epoch=0,
-            ratios=[0],
-        )
+    for i, (data, split) in enumerate(splits):
+        if i > 0:
+            # do not get test performance if doing hypersearch
+            if args.hyper_search:
+                return
+            # disable wandb
+            cfg.wandb.use = False
+
+        if "hard" in cfg.explainer_eval.eval_mask_type:
+            ratios = getattr(cfg.explainer_eval, cfg.explainer_eval.eval_mask_type)
+            if rank == 0:
+                logger.warning(separator)
+                logger.warning(
+                    f"Evaluate on {split} with {cfg.explainer_eval.eval_mask_type}"
+                )
+            start_time = time.time()
+            explain(
+                cfg,
+                explainer,
+                data,
+                logger,
+                device,
+                filtered_data=filtered_data,
+                working_dir=working_dir,
+                split=split,
+                run=wandb_run,
+                epoch=0,
+                eval_mask_type=cfg.explainer_eval.eval_mask_type,
+                ratios=ratios,
+            )
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            if util.get_rank() == 0:
+                logger.warning(separator)
+                logger.warning(
+                    f"Execution time for inference on {split}: {elapsed_time:.1f} seconds"
+                )
+        else:
+            if rank == 0:
+                logger.warning(separator)
+                logger.warning(f"Evaluate on {split}")
+            explain(
+                cfg,
+                explainer,
+                data,
+                logger,
+                device,
+                filtered_data=filtered_data,
+                working_dir=working_dir,
+                split=split,
+                run=wandb_run,
+                epoch=0,
+                ratios=[0],
+            )
+
+    if args.train_config is not None:
+        explainer_util.train_nbfnet(args, vars, dir, working_dir, logger, wandb_run)
 
 
 if __name__ == "__main__":

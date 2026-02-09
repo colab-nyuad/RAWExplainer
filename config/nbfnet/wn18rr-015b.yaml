@@ -1,16 +1,14 @@
-# output_dir: /storage/ryoji/Graph-Transformer/NBFNet-PyG/experiments/
-output_dir: /scratch/rk3570/Graph-Transformer/NBFNet-PyG/experiments/
+output_dir: /scratch/id/RAWExplainer/experiments/
 
 dataset:
   class: WN18RR
-  # root: /storage/ryoji/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
-  root: /scratch/rk3570/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
   use: {{ use_wandb }}
-  entity: "team_ryoji"
-  project: SampleX-WN18RR
-  name: NBFNet-0.15b
+  entity: "team-name"
+  project: project-name
+  name: NBFNet-WN-0.15b
 
 model:
   class: NBFNet

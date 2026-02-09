@@ -1,14 +1,14 @@
-output_dir: /storage/ryoji/Graph-Transformer/NBFNet-PyG/explanation/RAWExplainer/
+output_dir: /scratch/id/RAWExplainer/explanation/RAWExplainer/
 
 dataset:
   class: WN18RR
-  root:  /storage/ryoji/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
-  use: {{use_wandb}}
-  entity: "team_ryoji"
-  project: SampleX-WN18RR
-  name: RAWExplainer-Dev
+  use: {{ use_wandb }}
+  entity: "team-name"
+  project: project-name
+  name: RAWExplainer-WN18RR
 
 model:
   class: NBFNet
@@ -24,33 +24,37 @@ model:
 explainer:
   class: RAWExplainer
   size_reg: 4
-  ent_reg: 1
-  temp_start: 1
-  temp_end: 1
-  sample_bias: 0.3
+  ent_reg: 2
+  temp_start: 2
+  temp_end: 2
+  sample_bias: 0.4
   rel_emb: yes
   num_mlp_layer: 2
   use_default_aggr: no
   topk_tails: 2
-  ego_network: yes
+  ego_network: no
   joint_training: no
   # Random Walks
   random_walk_loss: yes
   adj_aggr: sum
   teleport_prob: 0.2
-  rw_topk_node: 50
-  reg_loss_inside: 0.5
+  rw_topk_node: 500
+  reg_loss_inside: 1
   reg_loss_outside: 0.5
   use_teleport_adj: yes
+  # Path Loss
+  with_path_loss: no
+  reg_path_loss: 3
+  max_path_length: 3
   # Optims
   factual: yes
-  counter_factual: yes
-  expl_gnn_model: yes
+  counter_factual: no
+  expl_gnn_model: no
 
 explainer_eval: # the evaluation of the explainers
   eval_mask_type: hard_edge_mask_top_k
-  hard_edge_mask_top_k: [100, 300, 500, 1000]
-  eval_type: [factual_eval, counter_factual_eval]
+  hard_edge_mask_top_k: [25, 50, 75, 100, 300, 500, 1000]
+  eval_type: [factual_eval]
 
 task:
   num_negative: 32
@@ -60,18 +64,20 @@ task:
 
 optimizer:
   class: Adam
-  lr: 5.0e-4
+  lr: 0.00005
 
 train:
-  gpus: {{gpus}}
-  batch_size: 8
-  # num_epoch: 10
-  num_epoch: 0
+  gpus: {{ gpus}}
+  batch_size: 4
+  num_epoch: 10
   log_interval: 100
   num_workers: 4
   step: 1
   checkpoint_best: yes
   train_on_val: yes
 
-checkpoint: /storage/ryoji/Graph-Transformer/NBFNet-PyG/checkpoint/explain/wn18rr_015b.pth
-eval_checkpoint: /storage/ryoji/Graph-Transformer/NBFNet-PyG/checkpoint/explain/wn18rr_015b.pth
+checkpoint: checkpoint/explain/wn18rr_dist_eval.pth
+eval_checkpoint: checkpoint/explain/wn18rr_dist_eval.pth
+
+save_explanation: yes
+valid_walltime: 20

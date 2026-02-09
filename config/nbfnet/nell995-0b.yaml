@@ -1,14 +1,14 @@
-output_dir: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/experiments/
+output_dir: /scratch/id/RAWExplainer/experiments/
 
 dataset:
   class: NELL995
-  root: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
   use: {{ use_wandb }}
-  entity: "team_ryoji"
-  project: SampleX-NELL995
-  name: NBFNet-NELL-0b-bs16
+  entity: "team-name"
+  project: project-name
+  name: NBFNet-NELL-0b
 
 model:
   class: NBFNet
@@ -40,11 +40,11 @@ eval:
   remove_ground_truth: no
   keep_ground_truth: no
   eval_on_train: no
-  save_topk: -1 # do not save topk
+  save_topk: -1
 
 train:
   gpus: {{ gpus }}
-  batch_size: 16      # increase batch size to 16 for DDP
+  batch_size: 16
   num_epoch: 20
   log_interval: 100
   train_on_expl: no

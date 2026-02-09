@@ -1,14 +1,14 @@
-output_dir: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/experiments/
+output_dir: /scratch/id/RAWExplainer/experiments/
 
 dataset:
   class: YAGO310
-  root: /scratch/sl9030/gml/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
   use: {{ use_wandb }}
-  entity: "team_ryoji"
-  project: SampleX-YAGO310
-  name: NBFNet-0b-bs4
+  entity: "team-name"
+  project: project-name
+  name: NBFNet-YAGO-0b
 
 model:
   class: NBFNet
@@ -40,7 +40,7 @@ eval:
   remove_ground_truth: no
   keep_ground_truth: no
   eval_on_train: no
-  save_topk: -1 # do not save topk
+  save_topk: -1
 
 train:
   gpus: {{ gpus }}

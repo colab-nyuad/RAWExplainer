@@ -35,3 +35,4 @@ hyperparams/**/*.csv
 docs/
 plots/output
 plots/
+.vscode/

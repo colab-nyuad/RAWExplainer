@@ -1,16 +1,14 @@
-# output_dir: /storage/ryoji/Graph-Transformer/NBFNet-PyG/experiments/
-output_dir: /scratch/oge208/Graph-Transformer/NBFNet-PyG/experiments/
+output_dir: /scratch/id/RAWExplainer/experiments/
 
 dataset:
   class: FB15k-237
-  # root: /storage/ryoji/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
-  root: /scratch/oge208/Graph-Transformer/NBFNet-PyG/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
   use: {{ use_wandb }}
-  entity: "team_ryoji"
-  project: SampleX-FB15k-237
-  name: NBFNet-0b
+  entity: "team-name"
+  project: project-name
+  name: NBFNet-FB-0b
 
 model:
   class: NBFNet
