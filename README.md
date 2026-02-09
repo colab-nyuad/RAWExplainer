@@ -1,9 +1,8 @@
-# RAWExplainer: Random Walk Explainer
+# RAWExplainer
 This repository contains the source code, datasets and configuration files for RAW-Explainer (Random Walk Explainer)
 
 ## Overview
-RAW-Explainer is a random-walk–based explanation method that learns to extract small, connected subgraphs from knowledge graphs to explain GNN link prediction decisions. 
-
+RAW-Explainer is a random-walk–based explanation method that learns to extract small, connected subgraphs from knowledge graphs to explain GNN link prediction models. 
 
 ## Installation
 
