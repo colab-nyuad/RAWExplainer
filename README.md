@@ -26,16 +26,6 @@ To train a GNN in the default setup on WN18RR, run the following command.
 ```
 python script/train_nbfnet.py -c config/nbfnet/wn18rr-0b.yaml --gpus [0] --use_wandb yes
 ```
-For DDP training, make sure to specify `cfg.model.use_pyg_propagation` as `yes`. Without it, the default pipeline will use RSPMM kernel, but this leads to inconsistencies at the explanation stage.
-
-```
-port=$(python script/find_free_port.py)
-echo "Using port: $port"
-python -m torch.distributed.launch --nproc_per_node=2 \
-        --master_port="$port" script/train_nbfnet.py \
-        -c config/nbfnet/wn18rr-0b.yaml \
-        --use_wandb yes --gpus [0,1]
-```
 
 ### Training Robust GNNs
 To train a robust GNN (GNN trained with randomized edge dropping), use either the default training setup or DDP approach with specification for `cfg.model.randomized_edge_drop` (refer to `config/nbfnet/wn18rr-015b.yaml`).
