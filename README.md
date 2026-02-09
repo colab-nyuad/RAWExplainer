@@ -1,292 +1,124 @@
-# NBFNet: Neural Bellman-Ford Networks #
+# RAWExplainer: Random Walk Explainer
+This repository contains the source code, datasets and configuration files for RAW-Explainer (Random Walk Explainer)
 
-PyG re-implementation of [NBFNet]. Authored by [Zhaocheng Zhu] and [Michael Galkin].
+## Overview
+RAW-Explainer is a random-walk–based explanation method that learns to extract small, connected subgraphs from knowledge graphs to explain GNN link prediction decisions. 
 
-[Zhaocheng Zhu]: https://kiddozhu.github.io
-[Michael Galkin]: https://migalkin.github.io/
-[NBFNet]: https://github.com/DeepGraphLearning/NBFNet
 
-## Overview ##
+## Installation
 
-NBFNet is a graph neural network framework inspired by traditional path-based
-methods. It enjoys the advantages of both traditional path-based methods and modern
-graph neural networks, including **generalization in the inductive setting**,
-**interpretability**, **high model capacity** and **scalability**. This repo implements
-NBFNet for transductive and inductive knowledge graph reasoning.
-
-![NBFNet](asset/nbfnet.svg)
-
-This codebase is based on PyTorch and PyTorch-Geometric. It supports training and
-inference with multiple GPUs or multiple machines.
-
-## Installation ##
-
-You may install the dependencies via either conda or pip. Generally, NBFNet works
-with Python >= 3.7 and PyTorch >= 1.8.0.
-
-### From Conda ###
+We recommend using Conda with Python 3.10.
 
 ```bash
-conda install pytorch=1.8.0 cudatoolkit=11.1 pyg -c pytorch -c pyg -c conda-forge
-conda install ninja easydict pyyaml -c conda-forge
+conda create --name Ultra python=3.10
+conda activate Ultra
+# conda install -c conda-forge cxx-compiler
+conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 cudatoolkit=11.8 -c pytorch -c nvidia
+pip install torch-scatter==2.1.2 torch-sparse==0.6.18 torch-geometric==2.4.0 -f https://data.pyg.org/whl/torch-2.1.0+cu118.html
+pip install numpy==1.26.4 wandb ninja easydict pyyaml torcheval matplotlib pandas
+conda install dglteam::dgl-cuda11.1
 ```
 
-### From Pip ###
+
+## Experiments on WN18RR, FB15k-237, NELL-995 and YAGO3-10
+### GNN Training
+To train a GNN in the default setup on WN18RR, run the following command.
+```
+python script/train_nbfnet.py -c config-new/nbfnet/wn18rr-0b.yaml --gpus [0] --use_wandb yes
+```
+For DDP training, make sure to specify `cfg.model.use_pyg_propagation` as `yes`. Without it, the default pipeline will use RSPMM kernel, but this leads to inconsistencies at the explanation stage.
+
+```
+port=$(python script/find_free_port.py)
+echo "Using port: $port"
+python -m torch.distributed.launch --nproc_per_node=2 \
+        --master_port="$port" script/train_nbfnet.py \
+        -c config-new/nbfnet/wn18rr-0b.yaml \
+        --use_wandb yes --gpus [0,1]
+```
+
+### Training Robust GNNs
+To train a robust GNN (GNN trained with randomized edge dropping), use either the default training setup or DDP approach with specification for `cfg.model.randomized_edge_drop` (refer to `config-new/nbfnet/wn18rr-015b.yaml`).
+
+The result will be stored in `./experiments/NBFNet/{dataset-name}/{time-stamp}`.
+
+## Explanations
+The explainers are split into two categories: 
+1. **Global Explainers** which include PGExplainer and RWExplainer
+2. **Instance Explainers** which include GNNExplainer, PaGE-Link, RandomWalk and BFS
+
+
+**Running Global Explainers**
+
+To run any of the global explainers, use the following command:
+```bash
+python script/global_explanation_optim.py -c config-new/explain/{config_file} --gpus [0] --use_wandb yes
+```
+
+Alternatively, run the same command using DDP:
+```
+port=$(python script/find_free_port.py)
+echo "Using port: $port"
+python -m torch.distributed.launch --nproc_per_node=2 \
+        --master_port="$port" script/global_explanation_optim,py \
+        -c config-new/explain/{config_file} \
+        --use_wandb yes --gpus [0,1]
+```
+
+**Running Instance Explainers**
+
+To run any of the instance explainers, use the following command:
 
 ```bash
-pip install torch==1.8.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
-pip install torch-scatter==2.0.8 torch-sparse==0.6.12 torch-geometric -f https://data.pyg.org/whl/torch-1.8.0+cu111.html
-pip install ninja easydict pyyaml
+python script/instance_explanation_optim.py -c config-new/explain/{config_file} --gpus [0] --use_wandb yes
 ```
-## Evaluation of a Sampled Graph using NBFNet ##
-The following is the method for evaluating a sampled graph on NBFNet.
-First, you will need to save the sampled graph and its target triple to make a prediction for. This will be a `.pt` file that consists of the tuple `(triples, target_edge)`. 
 
-`triples` is a 2D list of the triples of the graph in string format. As an example, see the below taken from the WN18RR dataset.
+Similarly, run the same command using DDP:
+```
+port=$(python script/find_free_port.py)
+echo "Using port: $port"
+python -m torch.distributed.launch --nproc_per_node=2 \
+        --master_port="$port" script/instance_explanation_optim.py \
+        -c config-new/explain/{config_file} \
+        --use_wandb yes --gpus [0,1]
+```
 
+The result will be stored in `./explanation/NBFNet/{dataset-name}/{time-stamp}`.
+
+## Downstream Evaluation using GNN Backbone
+Once explanations are generated, run the following command to feed the explanations into GNN backbone for evaluation using standard metrics. Ensure correct paths are set to `explainer_eval.expl_dir` and `checkpoint` for explanation directory and GNN backbone respectively.
 ```bash
-triples: 
-[['trade_name.n.01', '_member_of_domain_usage', 'metharbital.n.01'], ['call.v.03', '_verb_group', 'call.v.09'],['united_kingdom.n.01', '_member_of_domain_region', 'facer.n.01']]
-
-# This is a graph consisting of three triples
-# ! Note ! Do not add inverse edges, the inverse edges will be added automatically.
+python script/train_nbfnet.py -c config-new/nbfnet/wn18rr-0b-eval.yaml --gpus [0] --use_wandb yes
 ```
 
-`target_edge` is a list of the triple you want to make a prediction on this graph. As an example, see the below:
-
-```bash
-target_edge: 
-['trade_name.n.01', '_member_of_domain_usage', 'call.v.09']
+## End-to-end Training
+Alternatively, both explanation generation and downstream evaluation can be performed end-to-end using the following command:
 ```
-
-Save the two lists using torch. `torch.save((triples, target_edge), '{saving_path}')`.
-
-To run the NBFNet on this graph, simply run:
-```bash
-python script/samplingGraph.py -c config/transductive/{dataset_name}-topk.yaml --gpus [0] --file_name {saving_path}
-```
-
-You can control the `topk` parameter on the config to change how many topk entities to display. The topk entities and the output will be saved in the working dir. Check `experiments/NBFNet/{dataset_name}/{most_recent_dir}`
-
-Alternatively, check `testing_sampling.ipynb` for a demo.
-
-
-## Explanation ##
-
-To run explanation, use the following command.
-
-```bash
-python script/explain.py --c config/transductive/wn18rr-relpgexplainer.yaml --gpus [1]
-python script/explain.py --c config/transductive/wn18rr-relpgexplainer.yaml --gpus [0,1,2,3]
-python -m torch.distributed.launch --nproc_per_node=4 script/samplex.py -c config/transductive/wn18rr-relpgexplainer-softedgemask.yaml --gpus [0,1,2,3]
-```
-
-```bash
-python script/explain.py -c config/transductive/wn18rr-topk.yaml --gpus [0]
+# Global Explainers
+port=$(python script/find_free_port.py)
+echo "Using port: $port"
+python -m torch.distributed.launch --nproc_per_node=2 \
+        --master_port="$port" script/global_explanation_optim.py \
+        -c config-new/explain/{config_file} \
+        --use_wandb yes --gpus [0,1]
+        --train_config config-new/nbfnet/wn18rr-0b-eval.yaml
 ```
 
 
-## TopK paths ##
-```bash
-python script/get_path.py -c config/transductive/wn18rr-topk.yaml --gpus [3]
+```
+# Instance Explainers
+port=$(python script/find_free_port.py)
+echo "Using port: $port"
+python -m torch.distributed.launch --nproc_per_node=2 \
+        --master_port="$port" script/global_explanation_optim.py \
+        -c config-new/explain/{config_file} \
+        --use_wandb yes --gpus [0,1]
+        --train_config config-new/nbfnet/wn18rr-0b-eval.yaml
 ```
 
-## TopK Entities ##
-```bash
-python script/get_topk.py -c config/transductive/wn18rr-topk.yaml --gpus [0]
-```
-
-## Reproduction ##
-
-To reproduce the results of NBFNet, use the following command. Alternatively, you
-may use `--gpus null` to run NBFNet on a CPU. All the datasets will be automatically
-downloaded in the code.
-
-```bash
-python script/run.py -c config/inductive/wn18rr.yaml --gpus [0] --version v1
-```
-
-We provide the hyperparameters for each experiment in configuration files.
-All the configuration files can be found in `config/*/*.yaml`.
-
-For experiments on inductive relation prediction, you need to additionally specify
-the split version with `--version v1`.
-
-To run NBFNet with multiple GPUs or multiple machines, use the following commands
-
-```bash
-python -m torch.distributed.launch --nproc_per_node=4 script/run.py -c config/inductive/wn18rr.yaml --gpus [0,1,2,3]
-```
-
-```bash
-python -m torch.distributed.launch --nproc_per_node=3 script/run.py -c config/transductive/NELL995.yaml --gpus [0,1,2]
-python -m torch.distributed.launch --nproc_per_node=3 script/run.py -c config/transductive/fb15k237-topk.yaml --gpus [0,1,2]
-python -m torch.distributed.launch --nproc_per_node=3 script/run.py -c config/transductive/fb15k237-reproduce.yaml --gpus [0,1,2]
-```
+The result will be stored in `./explanation/NBFNet/{dataset-name}/{time-stamp}`.
 
 
-```bash
-python -m torch.distributed.launch --nnodes=4 --nproc_per_node=4 script/run.py -c config/inductive/wn18rr.yaml --gpus [0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3]
-```
+## License
 
-### Visualize Interpretations on FB15k-237 ###
-
-Once you have models trained on FB15k237, you can visualize the path interpretations
-with the following line. Please replace the checkpoint with your own path.
-
-```bash
-python script/visualize.py -c config/transductive/fb15k237_visualize.yaml --checkpoint /path/to/nbfnet/experiment/model_epoch_20.pth
-```
-
-## Results ##
-
-Here are the benchmark results of this re-implementation. All the results are
-obtained with 4 V100 GPUs (32GB). Note results may be slightly different if the
-model is trained with 1 GPU and/or a smaller batch size.
-
-### Knowledge Graph Completion ###
-
-<table>
-    <tr>
-        <th>Dataset</th>
-        <th>MR</th>
-        <th>MRR</th>
-        <th>HITS@1</th>
-        <th>HITS@3</th>
-        <th>HITS@10</th>
-    </tr>
-    <tr>
-        <th>FB15k-237</th>
-        <td>113</td>
-        <td>0.416</td>
-        <td>0.322</td>
-        <td>0.456</td>
-        <td>0.602</td>
-    </tr>
-    <tr>
-        <th>WN18RR</th>
-        <td>650</td>
-        <td>0.551</td>
-        <td>0.496</td>
-        <td>0.573</td>
-        <td>0.661</td>
-    </tr>
-</table>
-
-<table>
-    <tr>
-        <th>Dataset</th>
-        <th>Training Time</th>
-        <th>Test Time</th>
-        <th>GPU Memory</th>
-    </tr>
-    <tr>
-        <th>FB15k-237</th>
-        <td>22.8 min / epoch</td>
-        <td>64 s</td>
-        <td>22.9 GiB</td>
-    </tr>
-    <tr>
-        <th>WN18RR</th>
-        <td>12.0 min / epoch</td>
-        <td>16 s</td>
-        <td>16.1 GiB</td>
-    </tr>
-</table>
-
-### Inductive Relation Prediction ###
-
-<table>
-    <tr>
-        <th rowspan="2">Dataset</th>
-        <th colspan="4">HITS@10 (50 sample)</th>
-    </tr>
-    <tr>
-        <th>v1</th>
-        <th>v2</th>
-        <th>v3</th>
-        <th>v4</th>
-    </tr>
-    <tr>
-        <th>FB15k-237</th>
-        <td>0.821</td>
-        <td>0.948</td>
-        <td>0.957</td>
-        <td>0.959</td>
-    </tr>
-    <tr>
-        <th>WN18RR</th>
-        <td>0.954</td>
-        <td>0.903</td>
-        <td>0.909</td>
-        <td>0.888</td>
-    </tr>
-</table>
-
-<table>
-    <tr>
-        <th rowspan=2>Dataset</th>
-        <th colspan=3>v1</th>
-        <th colspan=3>v2</th>
-        <th colspan=3>v3</th>
-        <th colspan=3>v4</th>
-    </tr>
-    <tr>
-        <th>Training Time</th>
-        <th>Test Time</th>
-        <th>GPU Memory</th>
-        <th>Training Time</th>
-        <th>Test Time</th>
-        <th>GPU Memory</th>
-        <th>Training Time</th>
-        <th>Test Time</th>
-        <th>GPU Memory</th>
-        <th>Training Time</th>
-        <th>Test Time</th>
-        <th>GPU Memory</th>
-    </tr>
-    <tr>
-        <th>FB15k-237</th>
-        <td>2 s / epoch</td>
-        <td>< 1 s</td>
-        <td>3.51 GiB</td>
-        <td>6 s / epoch</td>
-        <td>< 1 s</td>
-        <td>5.02 GiB</td>
-        <td>15 s / epoch</td>
-        <td>< 1 s</td>
-        <td>6.56 GiB</td>
-        <td>29 s / epoch</td>
-        <td>< 1 s</td>
-        <td>8.10 GiB</td>
-    </tr>
-    <tr>
-        <th>WN18RR</th>
-        <td>3 s / epoch</td>
-        <td>< 1 s</td>
-        <td>5.17 GiB</td>
-        <td>22 s / epoch</td>
-        <td>< 1 s</td>
-        <td>11.3 GiB</td>
-        <td>3 s / epoch</td>
-        <td>1 s</td>
-        <td>18.7 GiB</td>
-        <td>7 s / epoch</td>
-        <td>1 s</td>
-        <td>6.84 GiB</td>
-    </tr>
-</table>
-
-## Citation ##
-
-If you find this codebase useful in your research, please cite the original paper.
-
-```bibtex
-@article{zhu2021neural,
-  title={Neural bellman-ford networks: A general graph neural network framework for link prediction},
-  author={Zhu, Zhaocheng and Zhang, Zuobai and Xhonneux, Louis-Pascal and Tang, Jian},
-  journal={Advances in Neural Information Processing Systems},
-  volume={34},
-  year={2021}
-}
-```
+This project is licensed under the MIT License: see the LICENSE file for details.
