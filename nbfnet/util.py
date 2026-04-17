@@ -15,8 +15,6 @@ import torch
 from torch import distributed as dist
 from torch_geometric.data import Data
 from torch_geometric.datasets import RelLinkPredDataset
-from hetero_rgcn import hetero_datasets
-from hetero_rgcn import rgcn
 
 from nbfnet import models, datasets, models_expl
 
@@ -404,9 +402,6 @@ def build_dataset(cfg):
 
     elif cls.startswith("Ind"):
         dataset = datasets.IndRelLinkPredDataset(name=cls[3:], **dataset_cfg.dataset)
-    elif cls in ["aug_citation", "synthetic"]:
-        dataset = hetero_datasets.HeteroDataset(name=cls, **dataset_cfg.dataset)
-
     else:
         raise ValueError("Unknown dataset `%s`" % cls)
 
@@ -620,8 +615,6 @@ def build_model(cfg):
     cls = model_cfg.model.pop("class")
     if cls == "NBFNet":
         model = models.NBFNet(**model_cfg.model)
-    elif cls == "RGCN":
-        model = rgcn.RGCN(**model_cfg.model)
     else:
         raise ValueError("Unknown model `%s`" % cls)
     if "checkpoint" in model_cfg:
@@ -634,8 +627,6 @@ def build_model(cfg):
 def get_model(model_cfg, cls):
     if cls == "NBFNet":
         model = models_expl.NBFNet(**model_cfg.model)
-    elif cls == "RGCN":
-        model = rgcn.RGCN(**model_cfg.model)
     else:
         raise ValueError("Unknown model `%s`" % cls)
     return model
