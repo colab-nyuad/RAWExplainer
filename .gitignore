@@ -32,7 +32,18 @@ hyperparam_debug_*.txt
 hyperparams/**/*.csv
 
 *.log
+run_nohup.sh
 docs/
 plots/output
 plots/
 .vscode/
+datasets/knowledge_graphs/**/processed
+datasets/knowledge_graphs/**/raw
+datasets/knowledge_graphs/WN18RR/ppr_scores
+misc/
+shell_scripts/
+job_outputs/
+oneshot/original
+oneshot/main-original
+redgnn/original
+astarnet/original
