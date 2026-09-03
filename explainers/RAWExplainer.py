@@ -51,20 +51,13 @@ class RAWExplainer(RWBaseExplainer):
         random_walk_inf=True,
         spanning_tree=False,
         spanning_tree_node_ratio=0.7,
-        with_path_loss=False,
-        reg_path_loss=1,
-        max_path_length=2,
         num_mlp_layer=1,
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_loss=True,
         use_default_aggr=False,
         ego_network=True,
-        factual=True,
-        counter_factual=False,
-        expl_gnn_model=False,
         model_to_evaluate=None,
         use_networkx_rw=False,
         gpu_device='cuda',
@@ -90,18 +83,11 @@ class RAWExplainer(RWBaseExplainer):
             convergence=convergence,
             spanning_tree=spanning_tree,
             spanning_tree_node_ratio=spanning_tree_node_ratio,
-            with_path_loss=with_path_loss,
-            reg_path_loss=reg_path_loss,
-            max_path_length=max_path_length,
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             keep_edge_weight=keep_edge_weight,
-            joint_training=joint_training,
             use_default_aggr=use_default_aggr,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
-            expl_gnn_model=expl_gnn_model,
             model_to_evaluate=model_to_evaluate,
         )
 
@@ -199,21 +185,10 @@ class RAWExplainer(RWBaseExplainer):
         else:
             raise NotImplementedError
 
-    def get_embedding(self, data, batch):
-        """
-        If we are training the expl GNN model, this gets the node embeddings using the expl model.
-        """
-        # the expl model can update its params
-        _, node_embeds, R_embeds = self.expl_model(data, batch, return_emb=True)
-        return node_embeds, R_embeds
-
     def get_mask(self, data, batch, node_embeds, R_embeds, epoch=None):
         """
         This function gets the edge mask.
         """
-        # get the embedding from expl gnn if we are using it.
-        if self.expl_gnn_model:
-            node_embeds, R_embeds = self.get_embedding(data, batch)
         src_node_emb = node_embeds[data.edge_batch, data.edge_index[0]]
         tgt_node_emb = node_embeds[data.edge_batch, data.edge_index[1]]
 
@@ -243,30 +218,25 @@ class RAWExplainer(RWBaseExplainer):
 
         assert self.training
         # based on the mask, get the edge weight
-        edge_weights = self.get_edge_weight(data, mask)
-        masked_preds = {}
-        for key, edge_weight in edge_weights.items():
-            if not self.use_default_aggr:  # aggregation with regards to the weights
-                data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
-            masked_pred = self.pred_model(data, batch, edge_weight=edge_weight)
-            assert not torch.any(torch.isnan(masked_pred))
-            masked_preds[key] = masked_pred
+        edge_weight = self.get_edge_weight(data, mask)
+        if not self.use_default_aggr:  # aggregation with regards to the weights
+            data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
+        masked_pred = self.pred_model(data, batch, edge_weight=edge_weight)
+        assert not torch.any(torch.isnan(masked_pred))
 
         size_loss, mask_ent_loss = self.compute_mask_loss(mask)
         if self.random_walk_loss:
             if self.edge_random_walk:
                 rw_loss = self.do_edge_random_walk(data, mask, return_loss=True)
-                path_loss = torch.tensor(0, device=mask.device)
             else:
                 if self.use_networkx_rw:
-                    rw_loss, path_loss = self.do_random_walk_networkx(data, mask, return_loss=True, device=self.gpu_device)
+                    rw_loss = self.do_random_walk_networkx(data, mask, return_loss=True, device=self.gpu_device)
                 else:
-                    rw_loss, path_loss = self.do_random_walk(data, mask, return_loss=True)
+                    rw_loss = self.do_random_walk(data, mask, return_loss=True)
         else:
             rw_loss = torch.tensor(0, device=mask.device)
-            path_loss = torch.tensor(0, device=mask.device)
 
-        return masked_preds, size_loss, mask_ent_loss, rw_loss, path_loss
+        return masked_pred, size_loss, mask_ent_loss, rw_loss
 
     @torch.no_grad()
     def evaluate_mask(self, data, batch, node_embeds, R_embeds):
@@ -317,10 +287,7 @@ class RAWExplainer(RWBaseExplainer):
             self.keep_edge_weight or self.eval_mask_type == "soft_edge_mask"
         ):
             # aggregation with regards to the weights
-            if self.factual_eval:
-                data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
-            if self.counter_factual_eval:
-                data.edge_filter[data.counter_factual_filter.to(torch.bool)] = 1 - mask
+            data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
 
         masked_pred = self.eval_model(data, batch, edge_weight=edge_weight)
         assert not torch.any(torch.isnan(masked_pred))

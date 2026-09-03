@@ -22,8 +22,6 @@ class EgoNet(BaseExplainer):
         topk_tails=1,
         eval_mask_type="hard_edge_mask_top_k",
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
         use_ground_truth_only=False,            # If True: use only (head, gt_tail), skip NBFNet predictions
         **kwargs,
@@ -33,8 +31,6 @@ class EgoNet(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
             **kwargs,
         )
@@ -64,9 +60,6 @@ class EgoNet(BaseExplainer):
         
         if not self.ego_network:
             print("WARNING: EgoNet explainer should be used with ego_network=True")
-
-        if self.factual or self.counter_factual:
-            print("factual / counter_factual objectives not meaningful for EgoNet")
 
         # Store random edge scores for consistency between train and eval
         self.edge_scores = None

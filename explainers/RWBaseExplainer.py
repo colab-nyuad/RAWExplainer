@@ -7,10 +7,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import to_networkx
 import matplotlib.pyplot as plt
 from explainers.BaseExplainer import BaseExplainer
-from explainers.PowerLink import get_path_loss
 from explainers.data_util import (
     recreate_data_object,
-    counter_factual_edge_filter,
     convert_multigraph_to_digraph,
 )
 from explainers.mst import kruskal_mst_edges
@@ -129,18 +127,11 @@ class RWBaseExplainer(BaseExplainer):
         ignore_head=False,
         spanning_tree=False,
         spanning_tree_node_ratio=0.7,
-        with_path_loss=False,
-        reg_path_loss=1,
-        max_path_length=2,
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_aggr=False,
         ego_network=True,
-        factual=True,
-        counter_factual=False,
-        expl_gnn_model=False,
         model_to_evaluate=None,
     ):
 
@@ -152,12 +143,8 @@ class RWBaseExplainer(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             keep_edge_weight=keep_edge_weight,
-            joint_training=joint_training,
             use_default_aggr=use_default_aggr,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
-            expl_gnn_model=expl_gnn_model,
             model_to_evaluate=model_to_evaluate,
         )
 
@@ -190,11 +177,6 @@ class RWBaseExplainer(BaseExplainer):
         # the stored node distribution
         self.node_dist = None
 
-        # Path loss setup
-        self.with_path_loss = with_path_loss
-        self.max_path_length = max_path_length
-        self.reg_path_loss = reg_path_loss
-
         # spanning tree settings
         self.spanning_tree = spanning_tree
         self.spanning_tree_node_ratio = spanning_tree_node_ratio
@@ -226,7 +208,7 @@ class RWBaseExplainer(BaseExplainer):
             device: device parameter (kept for compatibility)
         
         Returns:
-            If return_loss=True: (rw_loss, path_loss)
+            If return_loss=True: rw_loss
             If return_loss=False: (data, mask, node_mask, edge_mask, num_edges, num_nodes)
             If store_walk=True and node_dist is None: stores result and returns early
         """
@@ -238,13 +220,6 @@ class RWBaseExplainer(BaseExplainer):
         edge_index, edge_batch, rw_mask = convert_multigraph_to_digraph(
             data, mask, self.adj_aggr, handle_singletons=True
         )
-        
-        # Path loss computation (if needed)
-        path_loss = torch.tensor(0, device=mask.device)
-        if self.with_path_loss:
-            path_loss = get_path_loss(
-                data, edge_index, edge_batch, rw_mask, self.max_path_length
-            )
         
         # Compute PageRank for all batches
         if self.use_differentiable_pagerank or return_loss:
@@ -297,12 +272,7 @@ class RWBaseExplainer(BaseExplainer):
                 self.reg_loss_inside * loss_inside_subgraph
                 + self.reg_loss_outside * loss_outside_subgraph
             )
-            if self.with_path_loss:
-                path_loss = self.reg_path_loss * path_loss
-            else:
-                path_loss = torch.tensor(0, device=mask.device)
-            
-            return rw_loss, path_loss
+            return rw_loss
         
         # Transform mask
         else:
@@ -1087,11 +1057,7 @@ class RWBaseExplainer(BaseExplainer):
             edges = data.edge_index[:, edge_mask]
             edge_type = data.edge_type[edge_mask]
             edge_batch = data.edge_batch[edge_mask]
-        # Only prune the unimportant edges if we are doing factual explanation.
-        if self.factual_eval:
-            data = recreate_data_object(data, edges, edge_type, edge_batch)
-        elif self.counter_factual_eval:
-            data = counter_factual_edge_filter(data, edge_mask=edge_mask)
+        data = recreate_data_object(data, edges, edge_type, edge_batch)
         node_mask, edge_mask = self.get_node_mask_and_edge_mask(
             data, edge_batch, edges, edge_type
         )
@@ -1157,11 +1123,7 @@ class RWBaseExplainer(BaseExplainer):
         edges = data.edge_index[:, edges_inside_mask]
         edge_type = data.edge_type[edges_inside_mask]
         edge_batch = data.edge_batch[edges_inside_mask]
-        # Only prune the unimportant edges if we are doing factual explanation.
-        if self.factual_eval:
-            data = recreate_data_object(data, edges, edge_type, edge_batch)
-        elif self.counter_factual_eval:
-            data = counter_factual_edge_filter(data, edge_mask=edges_inside_mask)
+        data = recreate_data_object(data, edges, edge_type, edge_batch)
         node_mask, edge_mask = self.get_node_mask_and_edge_mask(
             data, edge_batch, edges, edge_type
         )
@@ -1183,10 +1145,7 @@ class RWBaseExplainer(BaseExplainer):
         edges = data.edge_index[:, edges_inside_mask]
         edge_type = data.edge_type[edges_inside_mask]
         edge_batch = data.edge_batch[edges_inside_mask]
-        if self.factual_eval:
-            data = recreate_data_object(data, edges, edge_type, edge_batch)
-        elif self.counter_factual_eval:
-            data = counter_factual_edge_filter(data, edge_mask=edges_inside_mask)
+        data = recreate_data_object(data, edges, edge_type, edge_batch)
         node_mask, edge_mask = self.get_node_mask_and_edge_mask(
             data, edge_batch, edges, edge_type
         )
@@ -1403,11 +1362,6 @@ class RWBaseExplainer(BaseExplainer):
             data, mask, self.adj_aggr, handle_singletons=True
         )
 
-        if self.with_path_loss:
-            path_loss = get_path_loss(
-                data, edge_index, edge_batch, rw_mask, self.max_path_length
-            )
-
         # get the stochastic adj matrix and the starting node dist
         stoch_adj, node_dist = self.get_stoch_adj_matrix(
             data, edge_index, edge_batch, rw_mask
@@ -1460,12 +1414,7 @@ class RWBaseExplainer(BaseExplainer):
                 self.reg_loss_inside * loss_inside_subgraph
                 + self.reg_loss_outside * loss_outside_subgraph
             )
-            if self.with_path_loss:
-                path_loss = self.reg_path_loss * path_loss
-            else:
-                path_loss = torch.tensor(0, device=mask.device)
-
-            return rw_loss, path_loss
+            return rw_loss
         else:
             # get the masks based on the hard masks
             return self.transform_mask_rw(data, mask, node_dist)

@@ -32,12 +32,9 @@ class PGExplainer(BaseExplainer):
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_aggr=False,
         mode="transductive",
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
     ):
 
@@ -49,11 +46,8 @@ class PGExplainer(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             keep_edge_weight=keep_edge_weight,
-            joint_training=joint_training,
             use_default_aggr=use_default_aggr,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
         )
 
@@ -146,12 +140,7 @@ class PGExplainer(BaseExplainer):
 
         if self.training:
             # based on the mask, get the edge weight
-            edge_weights = self.get_edge_weight(data, mask)
-
-            if self.factual:
-                edge_weight = edge_weights["factual"]
-            else:
-                edge_weight = edge_weights["counter_factual"]
+            edge_weight = self.get_edge_weight(data, mask)
 
             if not self.use_default_aggr:  # aggregation with regards to the weights
                 data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight

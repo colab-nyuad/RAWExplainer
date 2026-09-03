@@ -1,7 +1,7 @@
 import torch
 from torch_scatter import scatter_min, scatter
 from explainers.BaseExplainer import BaseExplainer
-from explainers.data_util import recreate_data_object, counter_factual_edge_filter
+from explainers.data_util import recreate_data_object
 
 
 class BFSNode(BaseExplainer):
@@ -27,8 +27,6 @@ class BFSNode(BaseExplainer):
         topk_tails=1,                                   
         eval_mask_type="hard_edge_mask_top_k",
         ego_network=False,                              # Use full graph
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
         use_ground_truth_only=False,                    # If True: Model-agnostic
         use_head_only=False,                            # If True: only head, no GT bias
@@ -41,8 +39,6 @@ class BFSNode(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
             keep_edge_weight=keep_edge_weight,
             **kwargs,
@@ -67,9 +63,6 @@ class BFSNode(BaseExplainer):
             print("BFSNode: Head-only mode - using ONLY head as central node (no GT bias)")
         elif use_ground_truth_only:
             print("BFSNode: Model-agnostic mode - using only (head, ground_truth_tail) as central nodes")
-
-        if self.factual or self.counter_factual:
-            print("factual / counter_factual objectives not meaningful for BFSNode")
 
         # Node distances (computed in train_mask, used in evaluate_mask)
         self.node_dist = None
@@ -259,10 +252,7 @@ class BFSNode(BaseExplainer):
         edge_batch = data.edge_batch[edge_mask]
 
         # Rebuild data object with selected edges
-        if self.factual_eval:
-            data = recreate_data_object(data, edges, edge_type, edge_batch)
-        elif self.counter_factual_eval:
-            data = counter_factual_edge_filter(data, edge_mask=edge_mask)
+        data = recreate_data_object(data, edges, edge_type, edge_batch)
 
         node_mask, edge_mask = self.get_node_mask_and_edge_mask(
             data, edge_batch, edges, edge_type

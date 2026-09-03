@@ -145,7 +145,6 @@ def train_and_validate(
                         train_data,
                         central_nodes,
                         query_batch,
-                        train_on_counter_factual=cfg.train.train_on_counter_factual,
                     )
                 else:
                     data = data_util.prepare_dist_data(
@@ -410,7 +409,6 @@ def test(
                     test_data,
                     central_nodes,
                     t_batch,
-                    train_on_counter_factual=cfg.train.train_on_counter_factual,
                 )
             else:
                 data = data_util.prepare_dist_data(
@@ -479,7 +477,6 @@ def test(
                     test_data,
                     central_nodes,
                     h_batch,
-                    train_on_counter_factual=cfg.train.train_on_counter_factual,
                 )
             else:
                 data = data_util.prepare_dist_data(
@@ -1002,98 +999,40 @@ if __name__ == "__main__":
                 cfg = torch.load(cfg_path)
         print(f"Loaded hyperparameters for dataset class: {dataset_class}")
     
-    # Check if dual evaluation is configured for Fidelity+
-    dual_eval = (
-        hasattr(cfg, 'explainer_eval') and 
-        hasattr(cfg.explainer_eval, 'eval_type') and 
-        isinstance(cfg.explainer_eval.eval_type, list) and
-        len(cfg.explainer_eval.eval_type) == 2 and 
-        'factual_eval' in cfg.explainer_eval.eval_type and 
-        'counter_factual_eval' in cfg.explainer_eval.eval_type
-    )
-    
     working_dir = util.create_working_directory(cfg)
     logger = util.get_root_logger()
-    
-    if dual_eval:
-        # Fidelity+ mode: run factual and counter-factual evaluations
-        if util.get_rank() == 0:
-            logger.warning(separator)
-            logger.warning("Fidelity+ Dual Evaluation Mode")
-            logger.warning(separator)
-        
-        # Run factual evaluation
-        if util.get_rank() == 0:
-            logger.warning("Running FACTUAL evaluation...")
-        cfg.train.train_on_counter_factual = False
-        factual_scores = run(cfg, args, working_dir, logger, run_id="factual", log_separate=True)
-        os.chdir(working_dir)
-        logger = util.change_logger_file(logger)
-        
-        # Run counter-factual evaluation
-        if util.get_rank() == 0:
-            logger.warning("Running COUNTER-FACTUAL evaluation...")
-        cfg.train.train_on_counter_factual = True
-        cf_scores = run(cfg, args, working_dir, logger, run_id="counter_factual", log_separate=True)
-        os.chdir(working_dir)
-        logger = util.change_logger_file(logger)
-        
-        # Compute and log Fidelity+
-        if util.get_rank() == 0:
-            logger.warning(separator)
-            logger.warning("Fidelity+ Results")
-            logger.warning(separator)
-            fidelity_results = {}
-            for split in factual_scores.keys():
-                factual_mrr = factual_scores[split].get('mrr', 0)
-                cf_mrr = cf_scores[split].get('mrr', 0)
-                fidelity_plus = factual_mrr - cf_mrr
-                fidelity_results[split] = {
-                    'factual_mrr': factual_mrr,
-                    'cf_mrr': cf_mrr,
-                    'fidelity+_mrr': fidelity_plus
-                }
-                logger.warning(f"{split}/factual_mrr: {factual_mrr:.4f}")
-                logger.warning(f"{split}/cf_mrr: {cf_mrr:.4f}")
-                logger.warning(f"{split}/fidelity+_mrr: {fidelity_plus:.4f}")
-            
-            # Save fidelity results
-            df = pd.DataFrame(fidelity_results)
-            df.to_csv(os.path.join(working_dir, "fidelity_results.csv"))
-            logger.warning(f"Saved fidelity results to {working_dir}/fidelity_results.csv")
-    else:
-        # Standard single-mode evaluation
-        avg_split_score = {}
-        # Get the value for X runs
-        for i in range(args.num_runs):
-            # change seed every run
-            args.seed += i
-            split_scores = run(
-                cfg, args, working_dir, logger, run_id=i, num_runs=args.num_runs
-            )
-            if args.num_runs > 1:
-                # set the dir back to the original in case we have a run-specific dir.
-                os.chdir(working_dir)
-                logger = util.change_logger_file(logger)
-            if util.get_rank() == 0:
-                for split_name, scores in split_scores.items():
-                    if split_name not in avg_split_score.keys():
-                        avg_split_score[split_name] = defaultdict(list)
-                    for metric, score in scores.items():
-                        avg_split_score[split_name][metric].append(score)
 
-        # Afterwards, calculate the average and std.
+    avg_split_score = {}
+    # Get the value for X runs
+    for i in range(args.num_runs):
+        # change seed every run
+        args.seed += i
+        split_scores = run(
+            cfg, args, working_dir, logger, run_id=i, num_runs=args.num_runs
+        )
+        if args.num_runs > 1:
+            # set the dir back to the original in case we have a run-specific dir.
+            os.chdir(working_dir)
+            logger = util.change_logger_file(logger)
         if util.get_rank() == 0:
-            logger.warning(separator)
-            all_split_scores = {}
-            for split_name, avg_score in avg_split_score.items():
-                logger.warning(f"{split_name} average scores")
-                all_split_scores[split_name] = {}
-                for metric, scores in avg_score.items():
-                    avg = np.average(scores)
-                    std = np.std(scores)
-                    logger.warning("avg_%s: %g, std: %g" % (metric, avg, std))
-                    all_split_scores[split_name][f"{metric}_avg"] = avg
-                    all_split_scores[split_name][f"{metric}_std"] = std
-            df = pd.DataFrame(all_split_scores)
-            df.to_csv(os.path.join(working_dir, f"all_evaluation.csv"))
+            for split_name, scores in split_scores.items():
+                if split_name not in avg_split_score.keys():
+                    avg_split_score[split_name] = defaultdict(list)
+                for metric, score in scores.items():
+                    avg_split_score[split_name][metric].append(score)
+
+    # Afterwards, calculate the average and std.
+    if util.get_rank() == 0:
+        logger.warning(separator)
+        all_split_scores = {}
+        for split_name, avg_score in avg_split_score.items():
+            logger.warning(f"{split_name} average scores")
+            all_split_scores[split_name] = {}
+            for metric, scores in avg_score.items():
+                avg = np.average(scores)
+                std = np.std(scores)
+                logger.warning("avg_%s: %g, std: %g" % (metric, avg, std))
+                all_split_scores[split_name][f"{metric}_avg"] = avg
+                all_split_scores[split_name][f"{metric}_std"] = std
+        df = pd.DataFrame(all_split_scores)
+        df.to_csv(os.path.join(working_dir, f"all_evaluation.csv"))

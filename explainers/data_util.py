@@ -294,7 +294,6 @@ def prepare_expl_data(
     data,
     central_nodes,
     batch,
-    train_on_counter_factual=False,
     count_components=False,
     ignore_center=False,
 ):
@@ -331,20 +330,12 @@ def prepare_expl_data(
         # get the edges of the induced subgraph
         edge_mask = torch.all(torch.isin(unique_edge_index, unique_node_id), dim=0)
         edge_mask = edge_mask.reshape(query.size(0), data.edge_index.size(1))
-        if train_on_counter_factual:
-            # include all the nodes
-            node_mask = torch.ones(
-                (query.size(0), data.num_nodes), dtype=torch.bool, device=query.device
-            )
-            # exclude edges from the induced graphs
-            edge_mask = ~edge_mask
-        else:
-            node_mask = torch.zeros(
-                (query.size(0), data.num_nodes), dtype=torch.bool, device=query.device
-            )
-            node_mask[batch_id, node_id] = True
-            # ensure that the central node (i.e. the head of the query) is included in each subgraph
-            node_mask[torch.arange(central_nodes.size(0)), central_nodes] = True
+        node_mask = torch.zeros(
+            (query.size(0), data.num_nodes), dtype=torch.bool, device=query.device
+        )
+        node_mask[batch_id, node_id] = True
+        # ensure that the central node (i.e. the head of the query) is included in each subgraph
+        node_mask[torch.arange(central_nodes.size(0)), central_nodes] = True
 
     else:
         num_edges = (expl >= 0).sum(1)
@@ -356,35 +347,20 @@ def prepare_expl_data(
         src_node_id = data.edge_index[0][edge_id]
         tgt_node_id = data.edge_index[1][edge_id]
         # create the node and edge mask for each query
-        # if we are training on counter factual explanations
-        if train_on_counter_factual:
-            # include all the nodes
-            node_mask = torch.ones(
-                (query.size(0), data.num_nodes), dtype=torch.bool, device=query.device
-            )
-            edge_mask = torch.ones(
-                (query.size(0), data.edge_index.size(1)),
-                dtype=torch.bool,
-                device=query.device,
-            )
-            # do not include the edges selected by the explainer
-            edge_mask[batch_id, edge_id] = False
-        # if we are training on factual explanations
-        else:
-            node_mask = torch.zeros(
-                (query.size(0), data.num_nodes), dtype=torch.bool, device=query.device
-            )
-            edge_mask = torch.zeros(
-                (query.size(0), data.edge_index.size(1)),
-                dtype=torch.bool,
-                device=query.device,
-            )
-            edge_mask[batch_id, edge_id] = True
-            node_mask[batch_id, src_node_id] = True
-            node_mask[batch_id, tgt_node_id] = True
-            if not ignore_center:
-                # ensure that the central node (i.e. the head of the query) is included in each subgraph
-                node_mask[torch.arange(central_nodes.size(0)), central_nodes] = True
+        node_mask = torch.zeros(
+            (query.size(0), data.num_nodes), dtype=torch.bool, device=query.device
+        )
+        edge_mask = torch.zeros(
+            (query.size(0), data.edge_index.size(1)),
+            dtype=torch.bool,
+            device=query.device,
+        )
+        edge_mask[batch_id, edge_id] = True
+        node_mask[batch_id, src_node_id] = True
+        node_mask[batch_id, tgt_node_id] = True
+        if not ignore_center:
+            # ensure that the central node (i.e. the head of the query) is included in each subgraph
+            node_mask[torch.arange(central_nodes.size(0)), central_nodes] = True
 
     return prepare_subgraph_data(
         data, central_nodes, node_mask, edge_mask, count_components=count_components
@@ -688,42 +664,6 @@ def recreate_data_object(data, edges, edge_type, edge_batch, edge_distance=None)
     subgraph_num_edges[index] = counts
     data.subgraph_num_edges = subgraph_num_edges
     data = create_batched_data(data)
-    return data
-
-
-def counter_factual_edge_filter(data, edge_mask=None, batch_id=None, edge_id=None):
-    """
-    This function modifies data.edge_filter such that the counter factual edges are dropped (gets value 0),
-    and creates data.counter_factual_edge_filter which has value 1 for counter factual edges.
-    There are two ways to specify the counter factual edges:
-        1. Pass edge_mask which specifies for each edge in data.edge_index
-            whether they are counter factual edge or not.
-        2. Pass batch_id and edge_id, which corresponds to the index of the counter factual edges
-            on data.batched_edge_index
-    Args:
-        data: the batched data
-        edge_mask
-        batch_id:
-    Returns:
-        data: the updated batched data
-    """
-    edge_filter = torch.zeros_like(data.edge_filter)
-    if edge_mask is not None:
-        edge_filter[data.edge_filter.to(torch.bool)] = 1 - edge_mask.to(
-            data.edge_filter.dtype
-        )
-        cf_edge_filter = torch.zeros_like(data.edge_filter)
-        cf_edge_filter[data.edge_filter.to(torch.bool)] = edge_mask.to(
-            data.edge_filter.dtype
-        )
-        data.edge_filter = edge_filter
-        data.counter_factual_filter = cf_edge_filter
-    else:
-        data.edge_filter[batch_id, edge_id] = 0  # drop the counter factual edges
-        edge_filter[batch_id, edge_id] = 1
-        data.counter_factual_filter = edge_filter
-    num_edges = (data.edge_filter + data.counter_factual_filter).sum(dim=1)
-    assert torch.equal(num_edges, data.subgraph_num_edges)
     return data
 
 

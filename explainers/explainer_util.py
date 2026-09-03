@@ -116,7 +116,7 @@ def build_explainer(cfg, model, eval_model, rw_dropout=False):
     return explainer
 
 
-def full_graph_prediction(full_data, batch, mode, model, topk=None):
+def full_graph_prediction(full_data, batch, mode, model):
     """
     Performs full graph prediction, get top k tails
     & the node and relation embeddings from the NBFNet
@@ -125,7 +125,6 @@ def full_graph_prediction(full_data, batch, mode, model, topk=None):
         batch: the true triples
         mode: the mode (True for tail and False for head)
         model: the explainer model (which holds the NBFNet)
-        topk: the topk prediction by the GNN
     Returns:
         topk_tails: the topk predicted tails for each query
         embeds: the node embeddings for each query
@@ -145,27 +144,15 @@ def full_graph_prediction(full_data, batch, mode, model, topk=None):
     # create batched_edge_index and edge_filter based on the masked data
     data = data_util.create_batched_data(data)
 
-    if model.expl_gnn_model and topk is not None:
-        # there is a GNN that gets the embeddings, skip full prediction
-        # get the topk tails from the saved topk
-        query = batch[:, 0, :]
-        query = query[:, [0, 2]].to("cpu")
-        all_query = topk[0]
-        row_id, num_match = tasks.edge_match(all_query.T, query.T)
-        assert torch.all(num_match == 1)
-        topk_tails = topk[1][row_id][:, : model.topk_tails].to(batch.device)
-        embeds, R = None, None
-
-    else:
-        original_pred, embeds, R = model.full_prediction(data, batch)
-        tails = torch.argsort(original_pred, dim=1, descending=True)
-        # option to filter out the other true tails, during training, you can also put the true tail
-        topk_tails = tails[:, : model.topk_tails]
-        # get the prediction of the topk tail
-        """
-        batch_id = torch.arange(batch_size).repeat_interleave(model.topk_tails)
-        topk_tail_score = original_pred[batch_id, topk_tails.flatten()].sigmoid()
-        """
+    original_pred, embeds, R = model.full_prediction(data, batch)
+    tails = torch.argsort(original_pred, dim=1, descending=True)
+    # option to filter out the other true tails, during training, you can also put the true tail
+    topk_tails = tails[:, : model.topk_tails]
+    # get the prediction of the topk tail
+    """
+    batch_id = torch.arange(batch_size).repeat_interleave(model.topk_tails)
+    topk_tail_score = original_pred[batch_id, topk_tails.flatten()].sigmoid()
+    """
     return topk_tails, embeds, R
 
 
@@ -214,11 +201,8 @@ def pgexplainer_train(train_data, batch, mode, model, parallel_model, epoch):
     # do masking
     data = model.pred_model.masking(data, batch)
     pred, size_loss, mask_ent_loss = parallel_model(data, batch, node_embeds, epoch)
-    # compute the loss only with the valid tails
-    if model.factual:  # factual explanation
-        label = torch.ones_like(pred)
-    else:
-        label = torch.zeros_like(pred)  # counter factual
+    # Preserve the prediction using only the selected explanation edges.
+    label = torch.ones_like(pred)
     loss = F.binary_cross_entropy_with_logits(pred, label, reduction="mean")
     return loss, size_loss, mask_ent_loss
 
@@ -232,7 +216,6 @@ def rawexplainer_train(
     parallel_model,
     epoch,
     is_synthetic=False,
-    train_topk=None,
 ):
     """
     Training RAWExplainer for Factual Explanation. RAWExplainer will be optimized based on the true label.
@@ -245,13 +228,12 @@ def rawexplainer_train(
         parallel_model: explainer model, could be DDP
         epoch: the epoch
         is_synthetic: whether the dataset is synthetic. Relevant for negative sampling mechanism.
-        train_topk: the topk prediction by the GNN, used for RW.
     Returns:
         loss, size_loss, mask_ent_loss, rw_loss
     """
     # get the topk predicted tails and the node and rel embeddings
     topk_tails, node_embeds, R_embeds = full_graph_prediction(
-        train_data, batch, mode, model, topk=train_topk
+        train_data, batch, mode, model
     )
     # create the central nodes for making the ego network
     heads = torch.where(mode, batch[:, 0], batch[:, 1])
@@ -296,48 +278,25 @@ def rawexplainer_train(
     # do masking
     data = model.pred_model.masking(data, batch)
     # create batched_edge_index and edge_filter based on the masked datas
-    preds, size_loss, mask_ent_loss, rw_loss, path_loss = parallel_model(
+    pred, size_loss, mask_ent_loss, rw_loss = parallel_model(
         data, batch, node_embeds, R_embeds, epoch
     )
 
-    factual_loss, counter_factual_loss = torch.zeros_like(size_loss), torch.zeros_like(
-        size_loss
-    )
     if model.ego_network:
-        if model.factual:
-            pred = preds["factual"]
-            target = torch.zeros_like(pred, dtype=torch.bool)
-            target[:, 0] = 1
-            factual_loss = compute_loss_ego(
-                cfg, pred, target, pos_included, valid_tails
-            )
-
-        if model.counter_factual:
-            pred = preds["counter_factual"]
-            target = torch.zeros_like(pred, dtype=torch.bool)
-            counter_factual_loss = compute_loss_ego(
-                cfg, pred, target, pos_included, valid_tails
-            )
+        target = torch.zeros_like(pred, dtype=torch.bool)
+        target[:, 0] = 1
+        factual_loss = compute_loss_ego(cfg, pred, target, pos_included, valid_tails)
 
     else:
-        if model.factual:
-            pred = preds["factual"]
-            target = torch.zeros_like(pred)
-            target[:, 0] = 1
-            factual_loss = compute_loss(cfg, pred, target)
-
-        if model.counter_factual:
-            pred = preds["counter_factual"]
-            target = torch.zeros_like(pred)
-            counter_factual_loss = compute_loss(cfg, pred, target)
+        target = torch.zeros_like(pred)
+        target[:, 0] = 1
+        factual_loss = compute_loss(cfg, pred, target)
 
     return (
         factual_loss,
-        counter_factual_loss,
         size_loss,
         mask_ent_loss,
         rw_loss,
-        path_loss,
     )
 
 
@@ -392,9 +351,7 @@ def compute_loss_ego(cfg, pred, is_pos, pos_included, valid_tails):
 
 
 @torch.no_grad()
-def test_preparation(
-    cfg, test_data, triples, mode, model, batch, test_topk=None, data=None
-):
+def test_preparation(cfg, test_data, triples, mode, model, batch, data=None):
     """
     This function does the static component of testing that doesn't change across
     evaluation of different ratios for the same batch.
@@ -409,7 +366,6 @@ def test_preparation(
         mode: the mode of evaluation
         model: the explainer model
         batch: the batch of triples to evaluate
-        test_topk: the topk predicted entities
         data: for instance explainers, the mask is trained already on a fixed subgraph.
                 use the same subgraph to not have issues.
     Returns:
@@ -452,7 +408,7 @@ def test_preparation(
         # Standard path: use NBFNet predictions
         # get the topk predicted tails and the node and rel embeddings
         topk_tails, node_embeds, R_embeds = full_graph_prediction(
-            test_data, triples, mode, model, topk=test_topk
+            test_data, triples, mode, model
         )
         heads = torch.where(mode, triples[:, 0], triples[:, 1])
         central_nodes = torch.cat((heads.unsqueeze(1), topk_tails), dim=-1)
@@ -688,20 +644,6 @@ def calc_metric_and_save_result(
     return stats, scores
 
 
-class ExplainerEval:
-    def __init__(self, explainer, attr_name):
-        self.explainer = explainer
-        self.original_value = getattr(explainer, attr_name)
-        assert self.original_value == False
-        self.attr_name = attr_name
-
-    def __enter__(self):
-        setattr(self.explainer, self.attr_name, True)
-
-    def __exit__(self, type, value, traceback):
-        setattr(self.explainer, self.attr_name, self.original_value)
-
-
 def logging_setup(cfg, explanations=True):
     stats = {}
     for eval_type in cfg.explainer_eval.eval_type:
@@ -763,102 +705,36 @@ def train_nbfnet(args, vars, dir, working_dir, logger, wandb_run):
     if not isinstance(ratios, list):
         ratios = [ratios]
 
-    # Check if dual evaluation is configured for Fidelity+
-    dual_eval = (
-        hasattr(cfg.explainer_eval, 'eval_type') and 
-        len(cfg.explainer_eval.eval_type) == 2 and 
-        'factual_eval' in cfg.explainer_eval.eval_type and 
-        'counter_factual_eval' in cfg.explainer_eval.eval_type
-    )
-
     avg_score = {}
-    fidelity_scores = {}  # Store per-ratio fidelity+ scores
-    
+
     for ratio in ratios:
         setattr(cfg.explainer_eval, cfg.explainer_eval.eval_mask_type, ratio)
         additional_info = f"{cfg.explainer_eval.eval_mask_type}_{ratio}"
-        
-        if dual_eval:
-            # Run factual evaluation
-            cfg.train.train_on_counter_factual = False
-            factual_split_scores = run(
-                cfg,
-                args,
-                working_dir,
-                logger,
-                run_id=f"factual_{additional_info}",
-                log_separate=True,
-            )
-            os.chdir(working_dir)
-            logger = util.change_logger_file(logger)
-            
-            # Run counter-factual evaluation
-            cfg.train.train_on_counter_factual = True
-            cf_split_scores = run(
-                cfg,
-                args,
-                working_dir,
-                logger,
-                run_id=f"counter_factual_{additional_info}",
-                log_separate=True,
-            )
-            os.chdir(working_dir)
-            logger = util.change_logger_file(logger)
-            
-            # Compute Fidelity+ and log
-            if util.get_rank() == 0:
-                stats = {}
-                for split in factual_split_scores.keys():
-                    if split not in avg_score.keys():
-                        avg_score[split] = defaultdict(list)
-                    if split not in fidelity_scores.keys():
-                        fidelity_scores[split] = []
-                    
-                    # Get MRR scores for fidelity+ computation
-                    factual_mrr = factual_split_scores[split].get('mrr', 0)
-                    cf_mrr = cf_split_scores[split].get('mrr', 0)
-                    fidelity_plus = factual_mrr - cf_mrr
-                    fidelity_scores[split].append(fidelity_plus)
-                    
-                    logger.warning(f"{split}/fidelity+_mrr_{ratio}: {fidelity_plus:.4f}")
-                    stats[f"{cfg.model['class']}_{split}/fidelity+_mrr_{additional_info}"] = fidelity_plus
-                    
-                    # Also aggregate individual metrics
-                    for metric, score in factual_split_scores[split].items():
-                        stats[f"{cfg.model['class']}_{split}/factual_{metric}_{additional_info}"] = score
-                        avg_score[split][f"factual_{metric}"].append(score)
-                    for metric, score in cf_split_scores[split].items():
-                        stats[f"{cfg.model['class']}_{split}/cf_{metric}_{additional_info}"] = score
-                        avg_score[split][f"cf_{metric}"].append(score)
-                
-                if wandb_run is not None:
-                    wandb_run.summary.update(stats)
-        else:
-            # Original single-mode evaluation
-            split_scores = run(
-                cfg,
-                args,
-                working_dir,
-                logger,
-                run_id=additional_info,
-                log_separate=True,
-            )
-            # reset the working dir and logger
-            os.chdir(working_dir)
-            logger = util.change_logger_file(logger)
-            if util.get_rank() == 0:
-                stats = {}
-                for split, scores in split_scores.items():
-                    if split not in avg_score.keys():
-                        avg_score[split] = defaultdict(list)
-                    for metric, score in scores.items():
-                        stats[
-                            f"{cfg.model['class']}_{split}/{metric}_{additional_info}"
-                        ] = score
-                        avg_score[split][metric].append(score)
-                if wandb_run is not None:
-                    wandb_run.summary.update(stats)
-    
+
+        split_scores = run(
+            cfg,
+            args,
+            working_dir,
+            logger,
+            run_id=additional_info,
+            log_separate=True,
+        )
+        # reset the working dir and logger
+        os.chdir(working_dir)
+        logger = util.change_logger_file(logger)
+        if util.get_rank() == 0:
+            stats = {}
+            for split, scores in split_scores.items():
+                if split not in avg_score.keys():
+                    avg_score[split] = defaultdict(list)
+                for metric, score in scores.items():
+                    stats[
+                        f"{cfg.model['class']}_{split}/{metric}_{additional_info}"
+                    ] = score
+                    avg_score[split][metric].append(score)
+            if wandb_run is not None:
+                wandb_run.summary.update(stats)
+
     if util.get_rank() == 0:
         logger.warning(separator)
         stats = {}
@@ -873,13 +749,6 @@ def train_nbfnet(args, vars, dir, working_dir, logger, wandb_run):
             df = pd.DataFrame(scores, index=ratios)
             df.to_csv(os.path.join(working_dir, f"{split}_all_evaluation.csv"))
         
-        # Log average Fidelity+ if dual evaluation
-        if dual_eval:
-            for split, fid_scores in fidelity_scores.items():
-                avg_fidelity = sum(fid_scores) / len(fid_scores)
-                stats[f"{cfg.model['class']}_{split}/avg_fidelity+_mrr"] = avg_fidelity
-                logger.warning(f"{cfg.model['class']}_{split}/avg_fidelity+_mrr: {avg_fidelity:.4f}")
-
         if wandb_run is not None:
             wandb_run.summary.update(stats)
 

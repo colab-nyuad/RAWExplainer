@@ -34,8 +34,6 @@ explainer:
   size_reg: 1
   ego_network: yes
   use_default_aggr: no
-  factual: yes
-  counter_factual: no
 
 explainer_eval:
   eval_mask_type: hard_edge_mask_top_k

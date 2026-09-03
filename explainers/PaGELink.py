@@ -12,7 +12,6 @@ from nbfnet import customized_func
 from explainers.data_util import (
     remove_edges,
     recreate_data_object,
-    counter_factual_edge_filter,
 )
 from explainers.path_utils import *
 from tqdm import tqdm
@@ -162,8 +161,6 @@ class PaGELink(BaseExplainer):
         If True, it will log the computation process, default to True.
     :param eval_mask_type: The mask type used for evaluation
     :param return_detailed_loss: whether to return detailed loss
-    :param joint_training: whether to conduct joint training of the GNN.
-
     """
 
     def __init__(
@@ -183,11 +180,8 @@ class PaGELink(BaseExplainer):
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_aggr=False,
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
     ):
 
@@ -197,11 +191,8 @@ class PaGELink(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             keep_edge_weight=keep_edge_weight,
-            joint_training=joint_training,
             use_default_aggr=use_default_aggr,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
         )
 
@@ -221,8 +212,6 @@ class PaGELink(BaseExplainer):
         self.all_loss = defaultdict(list)
         # Too Expensive to compute shortest paths across different examples.
         assert self.topk_tails == 1
-        assert self.factual + self.counter_factual == 1
-
     def _set_masks(self, data):
         """
         Inject the explanation mask into the message passing modules.
@@ -311,8 +300,7 @@ class PaGELink(BaseExplainer):
 
     def train_mask(self, data, batch):
         self._clear_masks()
-        # If counter factual explanation, we don't prune it.
-        if self.prune_graph and not self.counter_factual:
+        if self.prune_graph:
             data = self._prune_graph(data)
         self._set_masks(data)
         optimizer = getattr(optim, self.optimizer)([self.edge_mask], lr=self.lr)
@@ -323,12 +311,7 @@ class PaGELink(BaseExplainer):
         for e in range(0, self.epochs):
             optimizer.zero_grad()
             mask = torch.sigmoid(self.edge_mask)
-            edge_weights = self.get_edge_weight(data, mask)
-
-            if self.factual:
-                edge_weight = edge_weights["factual"]
-            else:
-                edge_weight = edge_weights["counter_factual"]
+            edge_weight = self.get_edge_weight(data, mask)
 
             if not self.use_default_aggr:  # aggregation with regards to the weights
                 data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
@@ -336,11 +319,7 @@ class PaGELink(BaseExplainer):
             masked_pred = self.pred_model(data, batch, edge_weight=edge_weight)
             assert not torch.any(torch.isnan(masked_pred))
 
-            if self.factual:  # factual explanation
-                label = torch.ones_like(masked_pred)
-            else:
-                label = torch.zeros_like(masked_pred)  # counter factual
-
+            label = torch.ones_like(masked_pred)
             loss = F.binary_cross_entropy_with_logits(
                 masked_pred, label, reduction="mean"
             )
@@ -373,7 +352,7 @@ class PaGELink(BaseExplainer):
         # evaluate the performance given the computed explanation paths!
         if self.eval_mask_type == "soft_edge_mask":
             # special pipeline as it cannot use the precomputed paths as explanations
-            if self.prune_graph and not self.counter_factual:
+            if self.prune_graph:
                 data = self._prune_graph(data)
             mask = torch.sigmoid(self.edge_mask)
             data, mask, node_mask, edge_mask, num_edges, num_nodes = (
@@ -456,10 +435,7 @@ class PaGELink(BaseExplainer):
             edges = data.edge_index[:, selected_edge_mask]
             edge_type = data.edge_type[selected_edge_mask]
             edge_batch = data.edge_batch[selected_edge_mask]
-            if self.factual_eval:
-                data = recreate_data_object(data, edges, edge_type, edge_batch)
-            elif self.counter_factual_eval:
-                data = counter_factual_edge_filter(data, edge_mask=selected_edge_mask)
+            data = recreate_data_object(data, edges, edge_type, edge_batch)
 
             node_mask, edge_mask = self.get_node_mask_and_edge_mask(
                 data, edge_batch, edges, edge_type

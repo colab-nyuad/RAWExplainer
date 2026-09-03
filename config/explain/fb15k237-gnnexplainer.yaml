@@ -29,8 +29,6 @@ explainer:
   topk_tails: 1
   ego_network: no
   use_default_aggr: no
-  factual: yes
-  counter_factual: no
 
 explainer_eval:
   eval_mask_type: hard_edge_mask_top_k
