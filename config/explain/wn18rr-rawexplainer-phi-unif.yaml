@@ -1,13 +1,13 @@
-output_dir: /scratch/sl9030/gml/RAWExplainer/explanation/RAWExplainer/
+output_dir: /scratch/id/RAWExplainer/explanation/RAWExplainer/
 
 dataset:
   class: WN18RR
-  root: /scratch/sl9030/gml/RAWExplainer/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
   use: {{ use_wandb }}
-  entity: "team_ryoji"
-  project: SampleX-WN18RR
+  entity: "team-name"
+  project: project-name
   name: RAWExplainer-WN18RR-Phi-Unif
 
 model:
@@ -76,8 +76,8 @@ train:
   checkpoint_best: yes
   train_on_val: yes
 
-checkpoint: /scratch/sl9030/gml/RAWExplainer/checkpoint/explain/wn18rr_015b.pth
-eval_checkpoint: /scratch/sl9030/gml/RAWExplainer/checkpoint/explain/wn18rr_015b.pth
+checkpoint: checkpoint/explain/wn18rr_015b.pth
+eval_checkpoint: checkpoint/explain/wn18rr_015b.pth
 
 save_explanation: yes
 valid_walltime: 20

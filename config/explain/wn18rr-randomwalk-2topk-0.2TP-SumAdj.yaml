@@ -1,13 +1,13 @@
-output_dir: /scratch/sl9030/gml/RAWExplainer/explanation/RandomWalk/
+output_dir: /scratch/id/RAWExplainer/explanation/RandomWalk/
 
 dataset:
   class: WN18RR
-  root: /scratch/sl9030/gml/RAWExplainer/datasets/knowledge_graphs/
+  root: /scratch/id/RAWExplainer/datasets/knowledge_graphs/
 
 wandb:
   use: {{ use_wandb }}
-  entity: "team_ryoji"
-  project: SampleX-WN18RR
+  entity: "team-name"
+  project: project-name
   name: RandomWalk-WN18RR-2TopkTails-0.2TP-SumAdj
 
 model:
@@ -55,8 +55,8 @@ train:
   step: 1
   train_on_val: no
 
-checkpoint: /scratch/sl9030/gml/RAWExplainer/checkpoint/explain/wn18rr_dist_eval.pth
-eval_checkpoint: /scratch/sl9030/gml/RAWExplainer/checkpoint/explain/wn18rr_dist_eval.pth
+checkpoint: checkpoint/explain/wn18rr_dist_eval.pth
+eval_checkpoint: checkpoint/explain/wn18rr_dist_eval.pth
 
 save_explanation: yes
 valid_walltime: 20
