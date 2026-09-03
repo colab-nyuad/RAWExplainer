@@ -217,12 +217,13 @@ class RAWExplainer(RWBaseExplainer):
         src_node_emb = node_embeds[data.edge_batch, data.edge_index[0]]
         tgt_node_emb = node_embeds[data.edge_batch, data.edge_index[1]]
 
-        if self.project_relation:
-            R_embeds = self.rel_projection(R_embeds)
+        embedding_parts = [src_node_emb, tgt_node_emb]
+        if self.rel_emb:
+            if self.project_relation:
+                R_embeds = self.rel_projection(R_embeds)
+            embedding_parts.append(R_embeds[data.edge_type])
 
-        rel_emb = R_embeds[data.edge_type]
-        # we don't care about the query H and R since NBFNet already encodes these information in the node emb
-        triple_emb = torch.cat([src_node_emb, tgt_node_emb, rel_emb], 1)
+        triple_emb = torch.cat(embedding_parts, dim=1)  # (E, H) -> (E, 2H or 3H)
         explanation = self.explainer_model(triple_emb)
 
         if self.training:
