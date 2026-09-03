@@ -17,8 +17,6 @@ class RandomWalk(RWBaseExplainer):
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
         use_ground_truth_only=False,  # If True: use only (head, gt_tail), skip NBFNet predictions
         use_head_only=False,          # If True: use ONLY head (no tail), avoids GT bias
@@ -36,8 +34,6 @@ class RandomWalk(RWBaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
         )
 
@@ -48,9 +44,6 @@ class RandomWalk(RWBaseExplainer):
             print("RandomWalk: Head-only mode - using ONLY head as central node (no GT bias)")
         elif use_ground_truth_only:
             print("RandomWalk: Model-agnostic mode - using only (head, ground_truth_tail) as central nodes")
-
-        if self.factual or self.counter_factual:
-            print("factual / counter_factual objectives not meaningful for RW")
 
     def train_mask(self, data, batch):
         mask = torch.ones_like(data.edge_type).to(torch.float32)

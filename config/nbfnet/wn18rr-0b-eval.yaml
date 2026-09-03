@@ -47,7 +47,6 @@ train:
   num_epoch: 0
   log_interval: 100
   train_on_expl: yes
-  train_on_counter_factual: no
   fine_tune_on_val: yes
 
 explainer_eval:

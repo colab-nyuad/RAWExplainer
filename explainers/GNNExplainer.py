@@ -19,8 +19,6 @@ class GNNExplainer(BaseExplainer):
     :param epochs: Number of epochs to train the GNNExplainer
     :param eval_mask_type: The mask type used for evaluation
     :param return_detailed_loss: whether to return detailed loss
-    :param joint_training: whether to conduct joint training of the GNN.
-
     """
 
     def __init__(
@@ -34,11 +32,8 @@ class GNNExplainer(BaseExplainer):
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_aggr=False,
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
     ):
 
@@ -50,17 +45,13 @@ class GNNExplainer(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             keep_edge_weight=keep_edge_weight,
-            joint_training=joint_training,
             use_default_aggr=use_default_aggr,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
         )
 
         self.lr = lr
         self.optimizer = optimizer
-        assert self.factual + self.counter_factual == 1
 
     def _set_masks(self, data):
         """
@@ -92,12 +83,7 @@ class GNNExplainer(BaseExplainer):
         for e in range(0, self.epochs):
             optimizer.zero_grad()
             mask = torch.sigmoid(self.edge_mask)
-            edge_weights = self.get_edge_weight(data, mask)
-
-            if self.factual:
-                edge_weight = edge_weights["factual"]
-            else:
-                edge_weight = edge_weights["counter_factual"]
+            edge_weight = self.get_edge_weight(data, mask)
 
             if not self.use_default_aggr:  # aggregation with regards to the weights
                 data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
@@ -106,11 +92,7 @@ class GNNExplainer(BaseExplainer):
             assert not torch.any(torch.isnan(masked_pred))
             size_loss, mask_ent_loss = self.regularization_loss(mask)
 
-            if self.factual:  # factual explanation
-                label = torch.ones_like(masked_pred)
-            else:
-                label = torch.zeros_like(masked_pred)  # counter factual
-
+            label = torch.ones_like(masked_pred)
             loss = F.binary_cross_entropy_with_logits(
                 masked_pred, label, reduction="mean"
             )

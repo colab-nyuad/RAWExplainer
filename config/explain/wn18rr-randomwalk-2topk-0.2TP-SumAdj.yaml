@@ -27,8 +27,6 @@ explainer:
   teleport_prob: 0.2
   adj_aggr: max
   ego_network: no
-  factual: yes
-  counter_factual: no
   use_head_only: no                # toggled off to use topk-tails
 
 explainer_eval:

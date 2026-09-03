@@ -1,10 +1,9 @@
-import copy
 import torch
 from torch import nn
 from nbfnet import tasks
 from torch_geometric.utils import degree
 from nbfnet import customized_func
-from explainers.data_util import recreate_data_object, counter_factual_edge_filter
+from explainers.data_util import recreate_data_object
 
 
 class CustomDDPWrapper(nn.parallel.DistributedDataParallel):
@@ -24,12 +23,8 @@ class BaseExplainer(nn.Module):
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_aggr=False,
         ego_network=True,
-        factual=True,
-        counter_factual=False,
-        expl_gnn_model=False,
         model_to_evaluate=None,
     ):
         super().__init__()
@@ -49,16 +44,6 @@ class BaseExplainer(nn.Module):
         self.use_default_aggr = use_default_aggr
         assert self.use_default_aggr == False
 
-        # whether to do factual / counter factual explanation
-        self.factual = factual
-        self.counter_factual = counter_factual
-        assert (
-            factual or counter_factual
-        ), "Please select factual, counter factual or both"
-        # evaluation
-        self.factual_eval = False
-        self.counter_factual_eval = False
-
         # *** evaluation mask settings *** #
         self.eval_mask_type = eval_mask_type
         self.max_num_nodes_in_mask = -1
@@ -68,29 +53,7 @@ class BaseExplainer(nn.Module):
         self.keep_edge_weight = keep_edge_weight
 
         # *** model to explain ***
-        # whether to have a separate expl GNN model
-        self.expl_gnn_model = expl_gnn_model
-        # whether to update the pred model given the masked subgraph
-        self.joint_training = joint_training
-        # pred model given the masked subgraph
         self.pred_model = model_to_explain
-
-        if self.expl_gnn_model:
-            # expl model that updates the embeddings
-            self.expl_model = copy.deepcopy(model_to_explain)
-            # the mlp used for decoding of NBFNet will not be updated since we are only getting the embeddings.
-            assert "NBFNet" in self.expl_model.__class__.__name__
-            for param in self.expl_model.mlp.parameters():
-                param.requires_grad = False
-        else:
-            self.expl_model = self.pred_model
-
-        # whether to optimize the pred model given the masked subgraph
-        if self.joint_training:
-            # original model used to obtain the original pred
-            self.original_model = copy.deepcopy(model_to_explain)
-        else:
-            self.original_model = self.pred_model
 
         # eval model given the expl subgraph, evaluates the quality of explanation
         if model_to_evaluate:  # if we are provided with the model used to evaluate
@@ -100,10 +63,8 @@ class BaseExplainer(nn.Module):
 
         if model_to_explain is not None:
             self.hops = model_to_explain.hops
-            # don't update the params of the predictor if not joint training
-            if not self.joint_training:
-                for param in self.pred_model.parameters():
-                    param.requires_grad = False
+            for param in self.pred_model.parameters():
+                param.requires_grad = False
 
         if model_to_evaluate is not None:
             # don't update the params of the evaluator if provided
@@ -117,19 +78,15 @@ class BaseExplainer(nn.Module):
 
     def set_train(self):
         self.train()
-        self.original_model.eval()  # the original model is always set to evaluation mode
-        # if not joint training, put the pred model and eval model to eval mode
-        if not self.joint_training:
-            self.pred_model.eval()
-            self.eval_model.eval()
+        self.pred_model.eval()
+        self.eval_model.eval()
 
     def forward(self):
         raise NotImplementedError
 
     @torch.no_grad()
     def full_prediction(self, data, batch):
-        # the original pred is given by the fixed original_mode, and in the case we have a separate expl gnn model, the embeddings are given by the expl_model.
-        original_pred, embeds, R = self.original_model(data, batch, return_emb=True)
+        original_pred, embeds, R = self.pred_model(data, batch, return_emb=True)
         return original_pred, embeds, R
 
     def regularization_loss(self, mask):
@@ -157,31 +114,15 @@ class BaseExplainer(nn.Module):
 
     def get_edge_weight(self, data, mask):
         """
-        Based on the mask, gets the edge weight, depending on counter-factual or not.
+        Get factual edge weights from the explanation mask.
         """
-        edge_weights = {}
-
-        if self.factual:  # Factual Explanation
-            edge_weight = torch.zeros_like(data.edge_filter)
-            edge_weight[data.edge_filter.to(torch.bool)] = mask
-            edge_weights["factual"] = edge_weight
-
-        if self.counter_factual:  # Counter-factual Explanation
-            edge_weight = torch.zeros_like(data.edge_filter)
-            edge_weight[data.edge_filter.to(torch.bool)] = 1 - mask
-            edge_weights["counter_factual"] = edge_weight
-
-        return edge_weights
+        edge_weight = torch.zeros_like(data.edge_filter)
+        edge_weight[data.edge_filter.to(torch.bool)] = mask
+        return edge_weight
 
     def get_edge_weight_eval(self, data, mask):
         edge_weight = torch.zeros_like(data.edge_filter)
-        assert self.factual_eval + self.counter_factual_eval == 1
-        if self.factual_eval:  # Factual Explanation
-            edge_weight[data.edge_filter.to(torch.bool)] = mask  # factual edges
-        if self.counter_factual_eval:
-            edge_weight[data.edge_filter.to(torch.bool)] = 1  # the unselected edges
-            # counter factual edges
-            edge_weight[data.counter_factual_filter.to(torch.bool)] = 1 - mask
+        edge_weight[data.edge_filter.to(torch.bool)] = mask
         return edge_weight
 
     def get_node_mask_and_edge_mask(self, data, batch_id, edges, edge_type):
@@ -255,10 +196,6 @@ class BaseExplainer(nn.Module):
         # get the selected edges
         edges = data.batched_edge_index[:, new_batch_id, new_edge_id]
         edge_type = data.batched_edge_type[new_batch_id, new_edge_id]
-        if self.counter_factual_eval:
-            data = counter_factual_edge_filter(
-                data, batch_id=new_batch_id, edge_id=new_edge_id
-            )
         return data, mask, new_batch_id, edges, edge_type
 
     def select_topk_nodes(self, data, mask, top_num_nodes):
@@ -304,8 +241,6 @@ class BaseExplainer(nn.Module):
         edges = data.edge_index[:, edge_mask]
         edge_type = data.edge_type[edge_mask]
         new_batch_id = data.edge_batch[edge_mask]
-        if self.counter_factual_eval:
-            data = counter_factual_edge_filter(data, edge_mask=edge_mask)
         return data, mask, new_batch_id, edges, edge_type
 
     def hard_edge_masks(self, data, mask, top_num_edges):
@@ -315,9 +250,7 @@ class BaseExplainer(nn.Module):
         data, mask, new_batch_id, edges, edge_type = self.select_topk_edges(
             data, mask, top_num_edges
         )
-        # Only prune the unimportant edges if we are doing factual explanation.
-        if self.factual_eval:
-            data = recreate_data_object(data, edges, edge_type, new_batch_id)
+        data = recreate_data_object(data, edges, edge_type, new_batch_id)
         node_mask, edge_mask = self.get_node_mask_and_edge_mask(
             data, new_batch_id, edges, edge_type
         )
@@ -340,9 +273,7 @@ class BaseExplainer(nn.Module):
         data, mask, new_batch_id, edges, edge_type = self.select_topk_nodes(
             data, mask, top_num_nodes
         )
-        # Only prune the unimportant edges if we are doing factual explanation.
-        if self.factual_eval:
-            data = recreate_data_object(data, edges, edge_type, new_batch_id)
+        data = recreate_data_object(data, edges, edge_type, new_batch_id)
         node_mask, edge_mask = self.get_node_mask_and_edge_mask(
             data, new_batch_id, edges, edge_type
         )

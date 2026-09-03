@@ -405,29 +405,12 @@ def build_dataset(cfg):
     else:
         raise ValueError("Unknown dataset `%s`" % cls)
 
-    if hasattr(cfg, "topk_dir"):
-        dataset.train_topk = torch.load(os.path.join(cfg.topk_dir, "train_topk.pt"))
-        dataset.valid_topk = torch.load(os.path.join(cfg.topk_dir, "valid_topk.pt"))
-        dataset.test_topk = torch.load(os.path.join(cfg.topk_dir, "test_topk.pt"))
-        # filter out any duplicates
-        for split in ["train", "valid", "test"]:
-            split_topk = getattr(dataset, f"{split}_topk")
-            all_query = split_topk[:, :2]
-            topk_tails = split_topk[:, 2:]
-            unique_query, unique_topk_tails = remove_duplicate(all_query, topk_tails)
-            setattr(dataset, f"{split}_topk", (unique_query, unique_topk_tails))
-
     if hasattr(cfg.train, "train_on_expl") and cfg.train.train_on_expl:
         if hasattr(cfg.explainer_eval, "samples") and cfg.explainer_eval.samples:
             additional_info = ""
         else:
             ratio = getattr(cfg.explainer_eval, cfg.explainer_eval.eval_mask_type)
-            # Handle eval_type being a list (for dual evaluation / fidelity+)
             eval_type = cfg.explainer_eval.eval_type
-            if isinstance(eval_type, list):
-                # For dual evaluation, always load from factual_eval explanations
-                # The train_on_counter_factual flag determines how they're used (keep vs remove)
-                eval_type = "factual_eval"
             additional_info = f"_{eval_type}_{cfg.explainer_eval.eval_mask_type}_{ratio}"
         if cfg.train.fine_tune_on_val:
             splits = ["valid", "test"]

@@ -119,8 +119,6 @@ class PowerLink(PaGELink):
         If True, it will log the computation process, default to True.
     :param eval_mask_type: The mask type used for evaluation
     :param return_detailed_loss: whether to return detailed loss
-    :param joint_training: whether to conduct joint training of the GNN.
-
     """
 
     def __init__(
@@ -142,11 +140,8 @@ class PowerLink(PaGELink):
         topk_tails=1,
         eval_mask_type="hard_node_mask",
         keep_edge_weight=False,
-        joint_training=False,
         use_default_aggr=False,
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
     ):
 
@@ -163,11 +158,8 @@ class PowerLink(PaGELink):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             keep_edge_weight=keep_edge_weight,
-            joint_training=joint_training,
             use_default_aggr=use_default_aggr,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
         )
         self.size_reg = size_reg
@@ -287,8 +279,7 @@ class PowerLink(PaGELink):
     def train_mask(self, data, batch, node_embeds, R_embeds):
 
         self._clear_masks()
-        # If counter factual explanation, we don't prune it.
-        if self.prune_graph and not self.counter_factual:
+        if self.prune_graph:
             data = self._prune_graph(data)
         self._set_masks()
 
@@ -307,12 +298,7 @@ class PowerLink(PaGELink):
             mask = self.triplet_edge_scorer(data, batch, node_embeds, R_embeds)
             mask = torch.sigmoid(mask)
 
-            edge_weights = self.get_edge_weight(data, mask)
-
-            if self.factual:
-                edge_weight = edge_weights["factual"]
-            else:
-                edge_weight = edge_weights["counter_factual"]
+            edge_weight = self.get_edge_weight(data, mask)
 
             if not self.use_default_aggr:  # aggregation with regards to the weights
                 data.edge_filter = edge_weight  # the edge filter used to calculate the degree info is the edge weight
@@ -321,11 +307,7 @@ class PowerLink(PaGELink):
             assert not torch.any(torch.isnan(masked_pred))
             size_loss, _ = self.regularization_loss(mask)
 
-            if self.factual:  # factual explanation
-                label = torch.ones_like(masked_pred)
-            else:
-                label = torch.zeros_like(masked_pred)  # counter factual
-
+            label = torch.ones_like(masked_pred)
             loss = F.binary_cross_entropy_with_logits(
                 masked_pred, label, reduction="mean"
             )

@@ -33,7 +33,6 @@ explainer:
   use_default_aggr: no
   topk_tails: 2
   ego_network: no
-  joint_training: no
   # Random Walks
   random_walk_loss: yes
   use_networkx_rw: no
@@ -43,14 +42,7 @@ explainer:
   reg_loss_inside: 1
   reg_loss_outside: 0.5
   use_teleport_adj: yes
-  # Path Loss
-  with_path_loss: no
-  reg_path_loss: 3
-  max_path_length: 3
   # Optims
-  factual: yes
-  counter_factual: no
-  expl_gnn_model: no
 
 explainer_eval:
   eval_mask_type: hard_edge_mask_top_k

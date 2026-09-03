@@ -22,8 +22,6 @@ class BFSDistance(BaseExplainer):
         topk_tails=1,                                   # Ignored: we use ground truth tail only
         eval_mask_type="hard_edge_mask_top_k",
         ego_network=True,
-        factual=True,
-        counter_factual=False,
         model_to_evaluate=None,
         use_ground_truth_only=True,                     # Key difference from EgoNet
         **kwargs,
@@ -33,8 +31,6 @@ class BFSDistance(BaseExplainer):
             topk_tails=topk_tails,
             eval_mask_type=eval_mask_type,
             ego_network=ego_network,
-            factual=factual,
-            counter_factual=counter_factual,
             model_to_evaluate=model_to_evaluate,
             **kwargs,
         )
@@ -58,9 +54,6 @@ class BFSDistance(BaseExplainer):
 
         if not self.ego_network:
             print("WARNING: BFSDistance explainer should be used with ego_network=True")
-
-        if self.factual or self.counter_factual:
-            print("factual / counter_factual objectives not meaningful for BFSDistance")
 
         # Store edge distances for selection
         self.edge_distances = None

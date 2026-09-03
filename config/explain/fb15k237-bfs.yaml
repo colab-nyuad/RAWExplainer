@@ -27,8 +27,6 @@ explainer:
   class: BFSNode
   topk_tails: 0
   ego_network: no
-  factual: yes
-  counter_factual: no
   use_head_only: yes
 
 explainer_eval:

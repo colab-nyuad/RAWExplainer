@@ -34,10 +34,7 @@ def train_and_validate(
     run=None,
     filtered_data=None,
     working_dir=None,
-    train_topk=None,
-    valid_topk=None,
     test_data=None,
-    test_topk=None,
     eval_split="valid",
 ):
     if cfg.train.num_epoch == 0:
@@ -68,17 +65,8 @@ def train_and_validate(
         parallel_model = model
 
     # * Best Model Selection *
-    if (
-        len(cfg.explainer_eval.eval_mask_type) == 1
-        and cfg.explainer_eval.eval_type[0] == "counter_factual_eval"
-    ):
-        best_result = float("inf")  # lower the metric, better it is for counter factual
-        operator = "less_than"  # comparison operator
-    else:
-        best_result = float(
-            "-inf"
-        )  # higher the metric, better it is for factual / dual evaluation
-        operator = "more_than"  # comparison operator
+    best_result = float("-inf")
+    operator = "more_than"  # comparison operator
     best_epoch = -1
 
     # * Miscellaneous *
@@ -105,11 +93,9 @@ def train_and_validate(
         elif cfg.explainer["class"] == "RAWExplainer":
             loss_dict = {
                 "factual_loss": [],
-                "counter_factual_loss": [],
                 "size_loss": [],
                 "mask_ent_loss": [],
                 "rw_loss": [],
-                "path_loss": [],
             }
         losses = []
 
@@ -143,7 +129,6 @@ def train_and_validate(
                     parallel_model,
                     epoch,
                     is_synthetic,
-                    train_topk=train_topk,
                 )
                 total_loss = 0
                 for l, l_name in zip(loss, loss_dict.keys()):
@@ -205,7 +190,6 @@ def train_and_validate(
                 logger,
                 device,
                 filtered_data=filtered_data,
-                test_topk=valid_topk,
                 working_dir=working_dir,
                 split=eval_split,
                 run=run,
@@ -223,7 +207,6 @@ def train_and_validate(
                     logger,
                     device,
                     filtered_data=filtered_data,
-                    test_topk=test_topk,
                     working_dir=working_dir,
                     split="test",
                     run=run,
@@ -270,7 +253,6 @@ def test(
     logger,
     device,
     filtered_data=None,
-    test_topk=None,
     working_dir=None,
     split="test",
     run=None,
@@ -370,48 +352,46 @@ def test(
                 mode=mode,
                 model=model,
                 batch=t_batch,
-                test_topk=test_topk,
             )
         )
 
         for eval_type in cfg.explainer_eval.eval_type:
-            with explainer_util.ExplainerEval(model, eval_type):
-                for r in ratios:
-                    t_pred, t_node_mask, t_edge_mask, t_num_edges, t_num_nodes = (
-                        explainer_util.test_prediction(
-                            cfg,
-                            data,
-                            model,
-                            batch=t_batch,
-                            eval_mask_type=cfg.explainer_eval.eval_mask_type,
-                            ratio=r,
-                            node_embeds=node_embeds,
-                            R_embeds=R_embeds,
-                            valid_tails=valid_tails,
+            for r in ratios:
+                t_pred, t_node_mask, t_edge_mask, t_num_edges, t_num_nodes = (
+                    explainer_util.test_prediction(
+                        cfg,
+                        data,
+                        model,
+                        batch=t_batch,
+                        eval_mask_type=cfg.explainer_eval.eval_mask_type,
+                        ratio=r,
+                        node_embeds=node_embeds,
+                        R_embeds=R_embeds,
+                        valid_tails=valid_tails,
+                    )
+                )
+                # assert torch.all(t_num_edges > 0)
+                if model.eval_mask_type == "hard_edge_mask_top_k":
+                    assert torch.all(t_num_edges <= r)
+                # * Rank and Stat Computation *
+                ranking = tasks.compute_ranking(t_pred, pos_t_index, t_mask)
+                inclusion = t_node_mask[torch.arange(batch_size), pos_t_index]
+                num_negative = t_mask.sum(dim=-1)
+                stats[eval_type]["rankings"][r].append(ranking)
+                stats[eval_type]["inclusions"][r].append(inclusion)
+                stats[eval_type]["num_negatives"][r].append(num_negative)
+                stats[eval_type]["num_edges"][r].append(t_num_edges)
+                stats[eval_type]["num_nodes"][r].append(t_num_nodes)
+                stats[eval_type]["heads"][r].append(batch[:, 0])
+                stats[eval_type]["rels"][r].append(batch[:, -1])
+                stats[eval_type]["tails"][r].append(batch[:, 1])
+                stats[eval_type]["modes"][r].append(torch.ones(ranking.shape))
+                if save_explanation:
+                    stats[eval_type]["explanations"][r].append(
+                        explainer_util.get_expl_edge_indices(
+                            query_batch, t_edge_mask, max_edges=r
                         )
                     )
-                    # assert torch.all(t_num_edges > 0)
-                    if model.eval_mask_type == "hard_edge_mask_top_k":
-                        assert torch.all(t_num_edges <= r)
-                    # * Rank and Stat Computation *
-                    ranking = tasks.compute_ranking(t_pred, pos_t_index, t_mask)
-                    inclusion = t_node_mask[torch.arange(batch_size), pos_t_index]
-                    num_negative = t_mask.sum(dim=-1)
-                    stats[eval_type]["rankings"][r].append(ranking)
-                    stats[eval_type]["inclusions"][r].append(inclusion)
-                    stats[eval_type]["num_negatives"][r].append(num_negative)
-                    stats[eval_type]["num_edges"][r].append(t_num_edges)
-                    stats[eval_type]["num_nodes"][r].append(t_num_nodes)
-                    stats[eval_type]["heads"][r].append(batch[:, 0])
-                    stats[eval_type]["rels"][r].append(batch[:, -1])
-                    stats[eval_type]["tails"][r].append(batch[:, 1])
-                    stats[eval_type]["modes"][r].append(torch.ones(ranking.shape))
-                    if save_explanation:
-                        stats[eval_type]["explanations"][r].append(
-                            explainer_util.get_expl_edge_indices(
-                                query_batch, t_edge_mask, max_edges=r
-                            )
-                        )
 
         # * Tail-Prediction only for Synthetic*
         if is_synthetic:
@@ -437,49 +417,47 @@ def test(
                 mode=mode,
                 model=model,
                 batch=h_batch,
-                test_topk=test_topk,
             )
         )
 
         for eval_type in cfg.explainer_eval.eval_type:
-            with explainer_util.ExplainerEval(model, eval_type):
-                for r in ratios:
-                    h_pred, h_node_mask, h_edge_mask, h_num_edges, h_num_nodes = (
-                        explainer_util.test_prediction(
-                            cfg,
-                            data,
-                            model,
-                            batch=h_batch,
-                            eval_mask_type=cfg.explainer_eval.eval_mask_type,
-                            ratio=r,
-                            node_embeds=node_embeds,
-                            R_embeds=R_embeds,
-                            valid_tails=valid_tails,
+            for r in ratios:
+                h_pred, h_node_mask, h_edge_mask, h_num_edges, h_num_nodes = (
+                    explainer_util.test_prediction(
+                        cfg,
+                        data,
+                        model,
+                        batch=h_batch,
+                        eval_mask_type=cfg.explainer_eval.eval_mask_type,
+                        ratio=r,
+                        node_embeds=node_embeds,
+                        R_embeds=R_embeds,
+                        valid_tails=valid_tails,
+                    )
+                )
+                # assert torch.all(h_num_edges > 0)
+                if model.eval_mask_type == "hard_edge_mask_top_k":
+                    assert torch.all(h_num_edges <= r)
+                # * Rank and Stat Computation *
+                ranking = tasks.compute_ranking(h_pred, pos_h_index, h_mask)
+                inclusion = h_node_mask[torch.arange(batch_size), pos_h_index]
+                num_negative = h_mask.sum(dim=-1)
+
+                stats[eval_type]["rankings"][r].append(ranking)
+                stats[eval_type]["inclusions"][r].append(inclusion)
+                stats[eval_type]["num_negatives"][r].append(num_negative)
+                stats[eval_type]["num_edges"][r].append(h_num_edges)
+                stats[eval_type]["num_nodes"][r].append(h_num_nodes)
+                stats[eval_type]["heads"][r].append(batch[:, 1])
+                stats[eval_type]["rels"][r].append(batch[:, -1])
+                stats[eval_type]["tails"][r].append(batch[:, 0])
+                stats[eval_type]["modes"][r].append(torch.zeros(ranking.shape))
+                if save_explanation:
+                    stats[eval_type]["explanations"][r].append(
+                        explainer_util.get_expl_edge_indices(
+                            query_batch, h_edge_mask, max_edges=r
                         )
                     )
-                    # assert torch.all(h_num_edges > 0)
-                    if model.eval_mask_type == "hard_edge_mask_top_k":
-                        assert torch.all(h_num_edges <= r)
-                    # * Rank and Stat Computation *
-                    ranking = tasks.compute_ranking(h_pred, pos_h_index, h_mask)
-                    inclusion = h_node_mask[torch.arange(batch_size), pos_h_index]
-                    num_negative = h_mask.sum(dim=-1)
-
-                    stats[eval_type]["rankings"][r].append(ranking)
-                    stats[eval_type]["inclusions"][r].append(inclusion)
-                    stats[eval_type]["num_negatives"][r].append(num_negative)
-                    stats[eval_type]["num_edges"][r].append(h_num_edges)
-                    stats[eval_type]["num_nodes"][r].append(h_num_nodes)
-                    stats[eval_type]["heads"][r].append(batch[:, 1])
-                    stats[eval_type]["rels"][r].append(batch[:, -1])
-                    stats[eval_type]["tails"][r].append(batch[:, 0])
-                    stats[eval_type]["modes"][r].append(torch.zeros(ranking.shape))
-                    if save_explanation:
-                        stats[eval_type]["explanations"][r].append(
-                            explainer_util.get_expl_edge_indices(
-                                query_batch, h_edge_mask, max_edges=r
-                            )
-                        )
 
         if processed_count % (100 // world_size) == 0 or processed_count == len(
             test_loader
@@ -508,16 +486,11 @@ def test(
         pbar.close()
 
     # * Aggregate Statistics and Calculate Metric *
-    # holds the average MRR for each eval type (Factual, Counterfactual)
-    eval_result = {}
     # holds all the statistics for this evaluation, used to log best model metrics
     eval_stats = {}
-    # holds all the MRR info. In case of dual evaluation, this is used to calculate char. score.
-    mrr_stats = {}
 
     for eval_type in cfg.explainer_eval.eval_type:
         results = []
-        mrr_stats[eval_type] = {}
         avg_score = defaultdict(list)
         for r in ratios:
             # make sure that all the result has been written to disk already.
@@ -581,12 +554,9 @@ def test(
                 # share the MRR result with other devices.
                 dist.all_reduce(result, op=dist.ReduceOp.SUM)
 
-            # * Log MRR *
-            mrr_stats[eval_type][f"{cfg.explainer_eval.eval_mask_type}_{r}"] = result
             results.append(result)
 
         result = sum(results) / len(results)  # the average MRR across ratios
-        eval_result[eval_type] = result
 
         if rank == 0:
             logger.warning(separator)
@@ -600,32 +570,6 @@ def test(
             # * Wandb Log *
             if cfg.wandb.use:
                 run.log(avg_stats, step=epoch, commit=False)
-
-    # * Dual Evaluation *
-    if len(cfg.explainer_eval.eval_type) == 2:
-        # calculate the characterization score
-        result = 1 / (
-            (0.5 / eval_result["factual_eval"])
-            + 0.5 / (1 - eval_result["counter_factual_eval"])
-        )
-        stats = {f"{split}/avg_char_score": result.item()}
-
-        if rank == 0:
-            logger.warning(separator)
-            logger.warning("avg_char_score: %g" % (result.item()))
-            # calculate the char score
-            if "hard" in cfg.explainer_eval.eval_mask_type:
-                for ratio, factual_score in mrr_stats["factual_eval"].items():
-                    counter_factual_score = mrr_stats["counter_factual_eval"][ratio]
-                    char_score = 1 / (
-                        (0.5 / factual_score) + 0.5 / (1 - counter_factual_score)
-                    )
-                    logger.warning(f"char_score_{ratio}: %g" % (char_score.item()))
-                    stats[f"{split}/char_score_{ratio}"] = char_score.item()
-            eval_stats.update(stats)  # store the characterization score
-            # * Wandb Log *
-            if cfg.wandb.use:
-                run.log(stats, step=epoch, commit=False)
 
     return result, eval_stats
 
@@ -679,18 +623,6 @@ def run(cfg, args):
         orig_train_data = train_data
         train_data = valid_data
 
-    # * The TopK tails *
-    if hasattr(cfg, "topk_dir"):
-        topk_dict = {
-            "train": dataset.train_topk,
-            "valid": dataset.valid_topk,
-            "test": dataset.test_topk,
-        }
-        if cfg.train.train_on_val:
-            raise NotImplementedError
-    else:
-        topk_dict = {"train": None, "valid": None, "test": None}
-
     # * Wanbd Settings *
     wandb_run = util.wandb_setup(cfg, util.get_rank())
 
@@ -704,10 +636,7 @@ def run(cfg, args):
         run=wandb_run,
         filtered_data=filtered_data,
         working_dir=working_dir,
-        train_topk=topk_dict["train"],
-        valid_topk=topk_dict["valid"],
         test_data=test_data,
-        test_topk=topk_dict["test"],
     )
 
     # if args.hyper_search:
@@ -752,7 +681,6 @@ def run(cfg, args):
             logger,
             device,
             filtered_data=filtered_data,
-            test_topk=topk_dict[split],
             working_dir=working_dir,
             split=split,
             final_evaluation=True,

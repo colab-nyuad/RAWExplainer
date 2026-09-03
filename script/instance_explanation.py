@@ -162,7 +162,6 @@ def explain(
     logger,
     device,
     filtered_data=None,
-    test_topk=None,
     working_dir=None,
     split="test",
     run=None,
@@ -275,43 +274,41 @@ def explain(
             mode=mode,
             model=model,
             batch=t_batch,
-            test_topk=test_topk,
             data=data,
         )
 
         for eval_type in cfg.explainer_eval.eval_type:
-            with explainer_util.ExplainerEval(model, eval_type):
-                for r in ratios:
-                    t_pred, t_node_mask, t_edge_mask, t_num_edges, t_num_nodes = (
-                        explainer_util.test_prediction(
-                            cfg,
-                            data,
-                            model,
-                            batch=t_batch,
-                            eval_mask_type=eval_mask_type,
-                            ratio=r,
-                            valid_tails=valid_tails,
+            for r in ratios:
+                t_pred, t_node_mask, t_edge_mask, t_num_edges, t_num_nodes = (
+                    explainer_util.test_prediction(
+                        cfg,
+                        data,
+                        model,
+                        batch=t_batch,
+                        eval_mask_type=eval_mask_type,
+                        ratio=r,
+                        valid_tails=valid_tails,
+                    )
+                )
+                ranking = tasks.compute_ranking(t_pred, pos_t_index, t_mask)
+                inclusion = t_node_mask[torch.arange(batch_size), pos_t_index]
+                num_negative = t_mask.sum(dim=-1)
+
+                stats[eval_type]["rankings"][r].append(ranking)
+                stats[eval_type]["inclusions"][r].append(inclusion)
+                stats[eval_type]["num_negatives"][r].append(num_negative)
+                stats[eval_type]["num_edges"][r].append(t_num_edges)
+                stats[eval_type]["num_nodes"][r].append(t_num_nodes)
+                stats[eval_type]["heads"][r].append(batch[:, 0])
+                stats[eval_type]["rels"][r].append(batch[:, -1])
+                stats[eval_type]["tails"][r].append(batch[:, 1])
+                stats[eval_type]["modes"][r].append(torch.ones(ranking.shape))
+                if save_explanation:
+                    stats[eval_type]["explanations"][r].append(
+                        explainer_util.get_expl_edge_indices(
+                            query_batch, t_edge_mask, max_edges=r
                         )
                     )
-                    ranking = tasks.compute_ranking(t_pred, pos_t_index, t_mask)
-                    inclusion = t_node_mask[torch.arange(batch_size), pos_t_index]
-                    num_negative = t_mask.sum(dim=-1)
-
-                    stats[eval_type]["rankings"][r].append(ranking)
-                    stats[eval_type]["inclusions"][r].append(inclusion)
-                    stats[eval_type]["num_negatives"][r].append(num_negative)
-                    stats[eval_type]["num_edges"][r].append(t_num_edges)
-                    stats[eval_type]["num_nodes"][r].append(t_num_nodes)
-                    stats[eval_type]["heads"][r].append(batch[:, 0])
-                    stats[eval_type]["rels"][r].append(batch[:, -1])
-                    stats[eval_type]["tails"][r].append(batch[:, 1])
-                    stats[eval_type]["modes"][r].append(torch.ones(ranking.shape))
-                    if save_explanation:
-                        stats[eval_type]["explanations"][r].append(
-                            explainer_util.get_expl_edge_indices(
-                                query_batch, t_edge_mask, max_edges=r
-                            )
-                        )
 
         if is_synthetic:
             if rank == 0:
@@ -337,43 +334,41 @@ def explain(
             mode=mode,
             model=model,
             batch=h_batch,
-            test_topk=test_topk,
             data=data,
         )
 
         for eval_type in cfg.explainer_eval.eval_type:
-            with explainer_util.ExplainerEval(model, eval_type):
-                for r in ratios:
-                    h_pred, h_node_mask, h_edge_mask, h_num_edges, h_num_nodes = (
-                        explainer_util.test_prediction(
-                            cfg,
-                            data,
-                            model,
-                            batch=h_batch,
-                            eval_mask_type=cfg.explainer_eval.eval_mask_type,
-                            ratio=r,
-                            valid_tails=valid_tails,
+            for r in ratios:
+                h_pred, h_node_mask, h_edge_mask, h_num_edges, h_num_nodes = (
+                    explainer_util.test_prediction(
+                        cfg,
+                        data,
+                        model,
+                        batch=h_batch,
+                        eval_mask_type=cfg.explainer_eval.eval_mask_type,
+                        ratio=r,
+                        valid_tails=valid_tails,
+                    )
+                )
+                ranking = tasks.compute_ranking(h_pred, pos_h_index, h_mask)
+                inclusion = h_node_mask[torch.arange(batch_size), pos_h_index]
+                num_negative = h_mask.sum(dim=-1)
+
+                stats[eval_type]["rankings"][r].append(ranking)
+                stats[eval_type]["inclusions"][r].append(inclusion)
+                stats[eval_type]["num_negatives"][r].append(num_negative)
+                stats[eval_type]["num_edges"][r].append(h_num_edges)
+                stats[eval_type]["num_nodes"][r].append(h_num_nodes)
+                stats[eval_type]["heads"][r].append(batch[:, 1])
+                stats[eval_type]["rels"][r].append(batch[:, -1])
+                stats[eval_type]["tails"][r].append(batch[:, 0])
+                stats[eval_type]["modes"][r].append(torch.zeros(ranking.shape))
+                if save_explanation:
+                    stats[eval_type]["explanations"][r].append(
+                        explainer_util.get_expl_edge_indices(
+                            query_batch, h_edge_mask, max_edges=r
                         )
                     )
-                    ranking = tasks.compute_ranking(h_pred, pos_h_index, h_mask)
-                    inclusion = h_node_mask[torch.arange(batch_size), pos_h_index]
-                    num_negative = h_mask.sum(dim=-1)
-
-                    stats[eval_type]["rankings"][r].append(ranking)
-                    stats[eval_type]["inclusions"][r].append(inclusion)
-                    stats[eval_type]["num_negatives"][r].append(num_negative)
-                    stats[eval_type]["num_edges"][r].append(h_num_edges)
-                    stats[eval_type]["num_nodes"][r].append(h_num_nodes)
-                    stats[eval_type]["heads"][r].append(batch[:, 1])
-                    stats[eval_type]["rels"][r].append(batch[:, -1])
-                    stats[eval_type]["tails"][r].append(batch[:, 0])
-                    stats[eval_type]["modes"][r].append(torch.zeros(ranking.shape))
-                    if save_explanation:
-                        stats[eval_type]["explanations"][r].append(
-                            explainer_util.get_expl_edge_indices(
-                                query_batch, h_edge_mask, max_edges=r
-                            )
-                        )
 
         if processed_count % (100 // world_size) == 0 or processed_count == len(loader):
             explainer_util.periodic_saving(
@@ -400,10 +395,7 @@ def explain(
         pbar.close()
 
     # * Aggregate Statistics and Calculate Metric *
-    # holds all the MRR info. In case of dual evaluation, this is used to calculate char. score.
-    mrr_stats = {}
     for eval_type in cfg.explainer_eval.eval_type:
-        mrr_stats[eval_type] = {}
         avg_score = defaultdict(list)
         for r in ratios:
             # make sure that all the result has been written to disk already.
@@ -464,9 +456,6 @@ def explain(
                 # share the MRR result with other devices.
                 dist.all_reduce(mrr, op=dist.ReduceOp.SUM)
 
-            # * Log MRR *
-            mrr_stats[eval_type][f"{cfg.explainer_eval.eval_mask_type}_{r}"] = mrr
-
         if rank == 0 and eval_mask_type is not None:
             logger.warning(separator)
             avg_stats = {}
@@ -477,52 +466,6 @@ def explain(
             # * Wandb Log *
             if cfg.wandb.use:
                 run.log(avg_stats, step=epoch, commit=False)
-
-    # * Dual Evaluation *
-    if len(cfg.explainer_eval.eval_type) == 2 and rank == 0:
-        char_stats = {}
-        fidelity_stats = {}
-        logger.warning(separator)
-        # calculate the char score and fidelity+
-        if "hard" in cfg.explainer_eval.eval_mask_type:
-            factual_scores, counter_factual_scores = [], []
-            fidelity_plus_scores = []
-            for ratio, factual_score in mrr_stats["factual_eval"].items():
-                counter_factual_score = mrr_stats["counter_factual_eval"][ratio]
-                factual_scores.append(factual_score.item())
-                counter_factual_scores.append(counter_factual_score.item())
-                
-                # Fidelity+ (MRR-based): measures rank degradation when explanation is removed
-                # Higher = better explanation (removing it hurts the prediction more)
-                fidelity_plus = factual_score - counter_factual_score
-                fidelity_plus_scores.append(fidelity_plus.item())
-                logger.warning(f"fidelity+_mrr_{ratio}: %g" % (fidelity_plus.item()))
-                fidelity_stats[f"{split}/fidelity+_mrr_{ratio}"] = fidelity_plus.item()
-                
-                char_score = 1 / (
-                    (0.5 / factual_score) + 0.5 / (1 - counter_factual_score)
-                )
-                logger.warning(f"char_score_{ratio}: %g" % (char_score.item()))
-                char_stats[f"{split}/char_score_{ratio}"] = char_score.item()
-
-        # calculate the average characterization score and average fidelity+
-        avg_factual_score = sum(factual_scores) / len(factual_scores)
-        avg_counter_factual_score = sum(counter_factual_scores) / len(
-            counter_factual_scores
-        )
-        result = 1 / (0.5 / avg_factual_score + 0.5 / (1 - avg_counter_factual_score))
-        char_stats[f"{split}/avg_char_score"] = result
-        logger.warning("avg_char_score: %g" % (result))
-        
-        # Average Fidelity+ (MRR-based)
-        avg_fidelity_plus = sum(fidelity_plus_scores) / len(fidelity_plus_scores)
-        fidelity_stats[f"{split}/avg_fidelity+_mrr"] = avg_fidelity_plus
-        logger.warning("avg_fidelity+_mrr: %g" % (avg_fidelity_plus))
-
-        # * Wandb Log *
-        if cfg.wandb.use:
-            all_stats = {**char_stats, **fidelity_stats}
-            run.log(all_stats, step=epoch, commit=True)
 
     return
 
